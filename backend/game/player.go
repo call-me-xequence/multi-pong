@@ -13,6 +13,9 @@ type Player struct {
 	// InputDir is the currently held movement direction: +1 right, -1 left, 0 idle.
 	InputDir int
 
+	// LastSeq is the sequence number of the last processed move input.
+	LastSeq uint32
+
 	// Send is the outbound queue consumed by the player's WebSocket writer goroutine.
 	Send chan []byte
 }

@@ -32,7 +32,8 @@ type GameConfig struct {
 	Lives int
 
 	// Networking
-	TickRate int // server simulation rate (Hz)
+	TickRate     int // server simulation rate (Hz)
+	SnapshotRate int // snapshot broadcast rate (Hz)
 }
 
 // DefaultConfig returns sane defaults.
@@ -54,6 +55,7 @@ func DefaultConfig() *GameConfig {
 		MaxBalls:        3,
 		Lives:           3,
 		TickRate:        60,
+		SnapshotRate:    64,
 	}
 }
 

@@ -1,6 +1,7 @@
 package game
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 	"time"
@@ -134,7 +135,7 @@ func TestPaddleInputClamps(t *testing.T) {
 	// Hold the paddle of player 0 "right" for a very long time.
 	p := r.Players[0]
 	for i := 0; i < 60*60; i++ {
-		r.SetInput(p.ID, 1)
+		r.SetInput(p.ID, 1, uint32(i+1))
 		r.Update(1.0 / 60.0)
 	}
 	r.mu.RLock()
@@ -254,5 +255,46 @@ func TestRestartAfterEndAllowsNewPlayers(t *testing.T) {
 		if !p.IsAlive || p.Lives != cfg.Lives {
 			t.Fatalf("player %s not reset (alive=%v lives=%d)", p.ID, p.IsAlive, p.Lives)
 		}
+	}
+}
+
+func TestInputSequenceEcho(t *testing.T) {
+	cfg := DefaultConfig()
+	r := NewRoom("seq", cfg, 2)
+	if _, err := r.AddPlayer("a", "A"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.AddPlayer("b", "B"); err != nil {
+		t.Fatal(err)
+	}
+
+	r.SetInput("a", 1, 7)
+	r.SetInput("a", -1, 9)
+	r.SetInput("a", 0, 5) // older/out-of-order seq must be ignored
+
+	r.mu.RLock()
+	last := r.Players[0].LastSeq
+	dir := r.Players[0].InputDir
+	r.mu.RUnlock()
+	if last != 9 {
+		t.Fatalf("expected lastSeq 9, got %d", last)
+	}
+	if dir != -1 {
+		t.Fatalf("expected dir -1, got %d", dir)
+	}
+
+	// The snapshot must echo lastSeq back to the client.
+	data := r.SnapshotJSON("a")
+	var snap struct {
+		Players []struct {
+			ID      string `json:"id"`
+			LastSeq uint32 `json:"lastSeq"`
+		} `json:"players"`
+	}
+	if err := json.Unmarshal(data, &snap); err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Players) != 2 || snap.Players[0].LastSeq != 9 {
+		t.Fatalf("snapshot lastSeq not echoed: %+v", snap.Players)
 	}
 }

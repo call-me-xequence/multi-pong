@@ -110,6 +110,7 @@ func (h *Hub) WSHandler(c *gin.Context) {
 		var msg struct {
 			Action string  `json:"action"`
 			Dir    int     `json:"dir"`
+			Seq    uint32  `json:"seq"`
 			C      float64 `json:"c"`
 		}
 		if err := conn.ReadJSON(&msg); err != nil {
@@ -117,7 +118,7 @@ func (h *Hub) WSHandler(c *gin.Context) {
 		}
 		switch msg.Action {
 		case "move":
-			room.SetInput(playerID, msg.Dir)
+			room.SetInput(playerID, msg.Dir, msg.Seq)
 		case "start":
 			if err := room.Start(playerID); err != nil {
 				queueJSON(player, map[string]interface{}{

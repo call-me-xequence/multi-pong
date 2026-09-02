@@ -18,6 +18,9 @@ let latestSnap: Snapshot | null = null;
 let myAngle = 0.5;
 let serverMyAngle = 0.5;
 let inputDir = 0; // -1 / 0 / +1 in screen direction
+let inputSeq = 0; // increments with every input change, used for reconciliation
+let serverLastSeq = 0; // last input sequence acknowledged by the server
+let frameCounter = 0;
 let wasAlive = true;
 let playing = false;
 let rafId = 0;
@@ -120,7 +123,8 @@ function setKey(which: 'left' | 'right', down: boolean): void {
   if (dir !== inputDir) {
     inputDir = dir;
     const screenDir = renderer ? renderer.getFaceScreenDirX() : 1;
-    net?.send({ action: 'move', dir: dir * screenDir });
+    inputSeq++;
+    net?.send({ action: 'move', dir: dir * screenDir, seq: inputSeq });
   }
 }
 
@@ -189,7 +193,7 @@ function connect(roomID: string): void {
 function handleSnapshot(snap: Snapshot): void {
   latestSnap = snap;
   buffer.push(snap);
-  physics.onSnapshot(snap);
+  physics.sync(snap);
 
   const me = snap.players.find((p) => p.id === snap.you);
 
@@ -198,7 +202,10 @@ function handleSnapshot(snap: Snapshot): void {
     showScreen('lobby');
     renderLobby(snap, buildInviteLink(snap.roomID));
   } else if (snap.state === 'playing') {
-    if (me) serverMyAngle = me.angle;
+    if (me) {
+      serverMyAngle = me.angle;
+      serverLastSeq = me.lastSeq ?? 0;
+    }
     if (!playing) {
       startPlaying(snap);
     } else if (me && !me.isAlive && wasAlive) {
@@ -228,7 +235,6 @@ function startPlaying(snap: Snapshot): void {
   if (!renderer) renderer = new GameRenderer($('game-canvas') as HTMLCanvasElement);
   renderer.resize();
   renderer.setup(snap.sides, snap.radius, snap.chamfer, snap.paddleHalf, snap.ballRadius, myIndex);
-  physics.setup(snap.sides, snap.radius, snap.chamfer, snap.ballRadius, snap.ballSpeed);
 
   if (!rafId && intervalId === null) {
     lastFrameTime = performance.now();
@@ -267,16 +273,23 @@ function frame(now: number): void {
   const dt = Math.min(0.05, (now - lastFrameTime) / 1000);
   lastFrameTime = now;
 
-  physics.step(dt);
+  frameCounter++;
+  if (frameCounter % 30 === 0) {
+    const latency = net ? net.getLatency() : 60;
+    physics.setDelay(Math.round(latency) + 50);
+  }
+
   stepMyPaddle(dt);
 
   if (renderer && latestSnap) {
-    const interp = buffer.playersAt(physics.renderTime) ?? latestSnap.players;
+    const renderTime = physics.renderTime;
+    const players = buffer.playersAt(renderTime) ?? latestSnap.players;
+    const balls = buffer.ballsAt(renderTime) ?? [];
     renderer.render({
       snap: latestSnap,
-      players: interp,
+      players,
       myAngle,
-      balls: physics.getBalls(),
+      balls,
     });
     renderHUD(latestSnap, (now - matchStartTime) / 1000);
   }
@@ -296,8 +309,9 @@ function stepMyPaddle(dt: number): void {
   if (dir !== 0) {
     myAngle += dir * screenDir * (speed / faceLen) * dt;
     myAngle = Math.max(half, Math.min(1 - half, myAngle));
-  } else {
-    // Gentle reconciliation to the authoritative server value while idle.
+  } else if (inputSeq <= serverLastSeq) {
+    // Reconcile toward the authoritative server value only when idle AND the
+    // server has acknowledged all of our inputs (prevents rubber-banding).
     myAngle += (serverMyAngle - myAngle) * Math.min(1, dt / 0.2);
   }
 }
@@ -307,12 +321,14 @@ function showGameOver(snap: Snapshot): void {
   showScreen('game');
 
   if (renderer && latestSnap) {
-    const interp = buffer.playersAt(physics.renderTime) ?? latestSnap.players;
+    const renderTime = physics.renderTime;
+    const players = buffer.playersAt(renderTime) ?? latestSnap.players;
+    const balls = buffer.ballsAt(renderTime) ?? [];
     renderer.render({
       snap: latestSnap,
-      players: interp,
+      players,
       myAngle,
-      balls: physics.getBalls(),
+      balls,
     });
   }
 

@@ -12,7 +12,7 @@ export interface NetHandlers {
 export class Net {
   private ws: WebSocket | null = null;
   private pingTimer: number | null = null;
-  private latencyMs = 100;
+  private latencyMs = 60;
   private closedByUser = false;
 
   constructor(
@@ -65,6 +65,7 @@ export class Net {
       /* onclose fires next */
     };
 
+    this.send({ action: 'ping', c: performance.now() });
     this.pingTimer = window.setInterval(() => {
       this.send({ action: 'ping', c: performance.now() });
     }, 3000);

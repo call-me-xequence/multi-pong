@@ -15,6 +15,7 @@ export interface SnapshotPlayer {
   lives: number;
   isAlive: boolean;
   isHost: boolean;
+  lastSeq?: number; // last input sequence processed by the server
 }
 
 export type GameState = 'waiting' | 'playing' | 'ended';
@@ -64,6 +65,7 @@ export type ServerMessage = Snapshot | WelcomeMessage | ErrorMessage | PongMessa
 export interface ClientMoveMessage {
   action: 'move';
   dir: number; // +1, -1 or 0
+  seq?: number; // input sequence number, for reconciliation
 }
 
 export interface ClientStartMessage {

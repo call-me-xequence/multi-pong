@@ -1,8 +1,7 @@
-// physics.ts — local simulation of the ball (client-side prediction) plus a
-// snapshot buffer used to interpolate other players' paddles.
+// physics.ts — snapshot interpolation for the ball and other players' paddles,
+// plus a small clock that maps client time to server time.
 
-import { buildWalls, closestPointOnSegment, type Seg } from './geometry.js';
-import type { Snapshot, SnapshotPlayer } from './types.js';
+import type { Snapshot, SnapshotPlayer, SnapshotBall } from './types.js';
 
 export interface SimBall {
   x: number;
@@ -11,146 +10,67 @@ export interface SimBall {
   vy: number;
 }
 
-export const RENDER_DELAY_MS = 100; // render 100ms in the past for other players
-export const CORRECTION_MS = 100;   // error-correction blend window
-const CORRECTION_THRESHOLD = 14;    // px of error before we correct the ball
-const MAX_FRAME_DT = 0.05;          // clamp tab-switch spikes
+// How far in the past (server time) we render. Rendering slightly in the past
+// lets us interpolate between two authoritative snapshots, which is smooth and
+// jitter-free — the server stays the single source of truth.
+export const RENDER_DELAY_MS = 80;
 
+/**
+ * Clock maps the local monotonic clock to the server's clock, so we can ask
+ * "what did the server state look like at time T?" even between snapshots.
+ */
 export class LocalPhysics {
-  private walls: Seg[] = [];
-  private radius = 300;
-  private ballRadius = 9;
-  private ballSpeed = 260;
-
-  private balls: SimBall[] = [];
-  private correction: { x: number; y: number }[] = [];
-
   private timeBase = false;
   private refServerT = 0;
   private refClientNow = 0;
+  private delayMs = RENDER_DELAY_MS;
 
-  setup(sides: number, radius: number, chamfer: number, ballRadius: number, ballSpeed: number): void {
-    this.walls = buildWalls(sides, radius, chamfer);
-    this.radius = radius;
-    this.ballRadius = ballRadius;
-    this.ballSpeed = ballSpeed;
-  }
-
-  /** Maps client wall-clock time to the server's clock. */
-  estimatedServerNow(): number {
-    if (!this.timeBase) return 0;
-    return this.refServerT + (performance.now() - this.refClientNow);
-  }
-
-  /** Server time at which we render other players (a small delay hides jitter). */
-  get renderTime(): number {
-    return this.estimatedServerNow() - RENDER_DELAY_MS;
-  }
-
-  /** Called whenever a fresh server snapshot arrives. */
-  onSnapshot(snap: Snapshot): void {
+  sync(snap: Snapshot): void {
     if (!this.timeBase) {
       this.refServerT = snap.t;
       this.refClientNow = performance.now();
       this.timeBase = true;
     }
-
-    while (this.balls.length < snap.balls.length) {
-      this.balls.push({ x: 0, y: 0, vx: 0, vy: 0 });
-      this.correction.push({ x: 0, y: 0 });
-    }
-    this.balls.length = snap.balls.length;
-    this.correction.length = snap.balls.length;
-
-    const lead = RENDER_DELAY_MS / 1000;
-    for (let i = 0; i < snap.balls.length; i++) {
-      const s = snap.balls[i];
-      const b = this.balls[i];
-
-      // Where the local ball *should* be, extrapolating the server state forward.
-      const tx = s.x + s.vx * lead;
-      const ty = s.y + s.vy * lead;
-      const ex = tx - b.x;
-      const ey = ty - b.y;
-      const err = Math.hypot(ex, ey);
-
-      if (err > CORRECTION_THRESHOLD) {
-        this.correction[i] = { x: ex, y: ey };
-      } else {
-        this.correction[i] = { x: 0, y: 0 };
-      }
-
-      // Always align velocity with the authoritative server velocity so the
-      // local prediction stays on track after bounces.
-      b.vx = s.vx;
-      b.vy = s.vy;
-    }
   }
 
-  /** Advances the local simulation by dt seconds (called every animation frame). */
-  step(dt: number): void {
-    if (dt <= 0) return;
-    if (dt > MAX_FRAME_DT) dt = MAX_FRAME_DT;
-
-    for (let i = 0; i < this.balls.length; i++) {
-      const b = this.balls[i];
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
-      this.collideBall(b);
-
-      // Apply the error correction gradually over CORRECTION_MS.
-      const c = this.correction[i];
-      const k = Math.min(1, (dt * 1000) / CORRECTION_MS);
-      b.x += c.x * k;
-      b.y += c.y * k;
-      c.x -= c.x * k;
-      c.y -= c.y * k;
-    }
+  /** Server's wall-clock time right now (estimated). */
+  estimatedServerNow(): number {
+    if (!this.timeBase) return 0;
+    return this.refServerT + (performance.now() - this.refClientNow);
   }
 
-  private collideBall(b: SimBall): void {
-    for (const seg of this.walls) {
-      const closest = closestPointOnSegment({ x: b.x, y: b.y }, seg);
-      const dx = b.x - closest.x;
-      const dy = b.y - closest.y;
-      const d = Math.hypot(dx, dy);
-      if (d >= this.ballRadius || d === 0) continue;
-
-      const nx = dx / d;
-      const ny = dy / d;
-      const dotv = b.vx * nx + b.vy * ny;
-      if (dotv < 0) {
-        b.vx -= 2 * dotv * nx;
-        b.vy -= 2 * dotv * ny;
-      }
-      b.x = closest.x + nx * this.ballRadius;
-      b.y = closest.y + ny * this.ballRadius;
-    }
+  /** Adjust the interpolation delay based on measured network latency. */
+  setDelay(ms: number): void {
+    this.delayMs = Math.max(40, Math.min(300, ms));
   }
 
-  getBalls(): SimBall[] {
-    return this.balls;
+  /** Server time at which we render: a little in the past to hide network jitter. */
+  get renderTime(): number {
+    return this.estimatedServerNow() - this.delayMs;
   }
 }
 
 /**
- * SnapshotBuffer stores recent snapshots and interpolates player paddles at an
- * arbitrary past server time, which hides network jitter for other players.
+ * SnapshotBuffer stores recent snapshots and interpolates state at an arbitrary
+ * past server time. Interpolation (rather than prediction) is what makes the
+ * ball move smoothly: the client just blends between the server's most recent
+ * confirmed states instead of trying to simulate physics it can't predict
+ * exactly (random wall perturbation, paddle steering).
  */
 export class SnapshotBuffer {
   private snaps: Snapshot[] = [];
 
   push(snap: Snapshot): void {
     this.snaps.push(snap);
-    if (this.snaps.length > 12) this.snaps.shift();
+    if (this.snaps.length > 32) this.snaps.shift();
   }
 
   latest(): Snapshot | null {
     return this.snaps.length ? this.snaps[this.snaps.length - 1] : null;
   }
 
-  /** Returns player paddles interpolated to the given server time. */
-  playersAt(renderTime: number): SnapshotPlayer[] | null {
+  /** Finds the two snapshots bracketing `renderTime` and the blend factor f. */
+  private bracketing(renderTime: number): [Snapshot, Snapshot, number] | null {
     const n = this.snaps.length;
     if (n === 0) return null;
 
@@ -166,15 +86,19 @@ export class SnapshotBuffer {
       }
     }
 
-    if (renderTime > b.t) {
-      return b.players;
-    }
-    if (renderTime < a.t) {
-      return a.players;
-    }
-
     const span = b.t - a.t || 1;
-    const f = (renderTime - a.t) / span;
+    let f = (renderTime - a.t) / span;
+    if (renderTime > b.t) f = 1;
+    if (renderTime < a.t) f = 0;
+    return [a, b, f];
+  }
+
+  /** Returns player paddles interpolated to the given server time. */
+  playersAt(renderTime: number): SnapshotPlayer[] | null {
+    const br = this.bracketing(renderTime);
+    if (!br) return null;
+    const [a, b, f] = br;
+
     const byId = new Map<string, SnapshotPlayer>();
     for (const p of a.players) byId.set(p.id, p);
 
@@ -191,5 +115,25 @@ export class SnapshotBuffer {
       });
     }
     return out;
+  }
+
+  /** Returns balls interpolated to the given server time. */
+  ballsAt(renderTime: number): SnapshotBall[] | null {
+    const br = this.bracketing(renderTime);
+    if (!br) return null;
+    const [a, b, f] = br;
+
+    // Ball count changed (goal / respawn): show the newer state as-is.
+    if (a.balls.length !== b.balls.length) return b.balls;
+
+    return b.balls.map((bb, i) => {
+      const ba = a.balls[i];
+      return {
+        x: ba.x + (bb.x - ba.x) * f,
+        y: ba.y + (bb.y - ba.y) * f,
+        vx: bb.vx,
+        vy: bb.vy,
+      };
+    });
   }
 }

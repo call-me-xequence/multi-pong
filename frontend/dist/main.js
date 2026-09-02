@@ -6,7 +6,7 @@ var Net = class {
     this.handlers = handlers;
     this.ws = null;
     this.pingTimer = null;
-    this.latencyMs = 100;
+    this.latencyMs = 60;
     this.closedByUser = false;
   }
   connect() {
@@ -44,6 +44,7 @@ var Net = class {
     };
     this.ws.onerror = () => {
     };
+    this.send({ action: "ping", c: performance.now() });
     this.pingTimer = window.setInterval(() => {
       this.send({ action: "ping", c: performance.now() });
     }, 3e3);
@@ -72,6 +73,107 @@ var Net = class {
   }
 };
 
+// ../frontend/src/physics.ts
+var RENDER_DELAY_MS = 80;
+var LocalPhysics = class {
+  constructor() {
+    this.timeBase = false;
+    this.refServerT = 0;
+    this.refClientNow = 0;
+    this.delayMs = RENDER_DELAY_MS;
+  }
+  sync(snap) {
+    if (!this.timeBase) {
+      this.refServerT = snap.t;
+      this.refClientNow = performance.now();
+      this.timeBase = true;
+    }
+  }
+  /** Server's wall-clock time right now (estimated). */
+  estimatedServerNow() {
+    if (!this.timeBase) return 0;
+    return this.refServerT + (performance.now() - this.refClientNow);
+  }
+  /** Adjust the interpolation delay based on measured network latency. */
+  setDelay(ms) {
+    this.delayMs = Math.max(40, Math.min(300, ms));
+  }
+  /** Server time at which we render: a little in the past to hide network jitter. */
+  get renderTime() {
+    return this.estimatedServerNow() - this.delayMs;
+  }
+};
+var SnapshotBuffer = class {
+  constructor() {
+    this.snaps = [];
+  }
+  push(snap) {
+    this.snaps.push(snap);
+    if (this.snaps.length > 32) this.snaps.shift();
+  }
+  latest() {
+    return this.snaps.length ? this.snaps[this.snaps.length - 1] : null;
+  }
+  /** Finds the two snapshots bracketing `renderTime` and the blend factor f. */
+  bracketing(renderTime) {
+    const n = this.snaps.length;
+    if (n === 0) return null;
+    let a = this.snaps[0];
+    let b = this.snaps[n - 1];
+    for (let i = 0; i < n - 1; i++) {
+      const s0 = this.snaps[i];
+      const s1 = this.snaps[i + 1];
+      if (renderTime >= s0.t && renderTime <= s1.t) {
+        a = s0;
+        b = s1;
+        break;
+      }
+    }
+    const span = b.t - a.t || 1;
+    let f = (renderTime - a.t) / span;
+    if (renderTime > b.t) f = 1;
+    if (renderTime < a.t) f = 0;
+    return [a, b, f];
+  }
+  /** Returns player paddles interpolated to the given server time. */
+  playersAt(renderTime) {
+    const br = this.bracketing(renderTime);
+    if (!br) return null;
+    const [a, b, f] = br;
+    const byId = /* @__PURE__ */ new Map();
+    for (const p of a.players) byId.set(p.id, p);
+    const out = [];
+    for (const pb of b.players) {
+      const pa = byId.get(pb.id);
+      if (!pa) {
+        out.push(pb);
+        continue;
+      }
+      out.push({
+        ...pb,
+        angle: pa.angle + (pb.angle - pa.angle) * f
+      });
+    }
+    return out;
+  }
+  /** Returns balls interpolated to the given server time. */
+  ballsAt(renderTime) {
+    const br = this.bracketing(renderTime);
+    if (!br) return null;
+    const [a, b, f] = br;
+    if (a.balls.length !== b.balls.length) return b.balls;
+    return b.balls.map((bb, i) => {
+      const ba = a.balls[i];
+      return {
+        x: ba.x + (bb.x - ba.x) * f,
+        y: ba.y + (bb.y - ba.y) * f,
+        vx: bb.vx,
+        vy: bb.vy
+      };
+    });
+  }
+};
+
 // ../frontend/src/geometry.ts
 var PI = Math.PI;
 function sub(a, b) {
@@ -82,9 +184,6 @@ function add(a, b) {
 }
 function mul(a, s) {
   return { x: a.x * s, y: a.y * s };
-}
-function dot(a, b) {
-  return a.x * b.x + a.y * b.y;
 }
 function len(a) {
   return Math.hypot(a.x, a.y);
@@ -131,18 +230,6 @@ function pointAlong(from, to, dist) {
 function faceMidAngle(sides, face) {
   return -PI / 2 + (face + 0.5) * (2 * PI / sides);
 }
-function closestPointOnSegment(p, s) {
-  const ab = sub(s.b, s.a);
-  const ap = sub(p, s.a);
-  const lenSq = dot(ab, ab);
-  let t = 0;
-  if (lenSq > 0) {
-    t = dot(ap, ab) / lenSq;
-    if (t < 0) t = 0;
-    else if (t > 1) t = 1;
-  }
-  return add(s.a, mul(ab, t));
-}
 function buildWalls(sides, radius, chamfer) {
   const v = generatePolygon(sides, radius);
   const c = chamferVertices(v, chamfer);
@@ -152,160 +239,6 @@ function buildWalls(sides, radius, chamfer) {
   }
   return walls;
 }
-
-// ../frontend/src/physics.ts
-var RENDER_DELAY_MS = 100;
-var CORRECTION_MS = 100;
-var CORRECTION_THRESHOLD = 14;
-var MAX_FRAME_DT = 0.05;
-var LocalPhysics = class {
-  constructor() {
-    this.walls = [];
-    this.radius = 300;
-    this.ballRadius = 9;
-    this.ballSpeed = 260;
-    this.balls = [];
-    this.correction = [];
-    this.timeBase = false;
-    this.refServerT = 0;
-    this.refClientNow = 0;
-  }
-  setup(sides, radius, chamfer, ballRadius, ballSpeed) {
-    this.walls = buildWalls(sides, radius, chamfer);
-    this.radius = radius;
-    this.ballRadius = ballRadius;
-    this.ballSpeed = ballSpeed;
-  }
-  /** Maps client wall-clock time to the server's clock. */
-  estimatedServerNow() {
-    if (!this.timeBase) return 0;
-    return this.refServerT + (performance.now() - this.refClientNow);
-  }
-  /** Server time at which we render other players (a small delay hides jitter). */
-  get renderTime() {
-    return this.estimatedServerNow() - RENDER_DELAY_MS;
-  }
-  /** Called whenever a fresh server snapshot arrives. */
-  onSnapshot(snap) {
-    if (!this.timeBase) {
-      this.refServerT = snap.t;
-      this.refClientNow = performance.now();
-      this.timeBase = true;
-    }
-    while (this.balls.length < snap.balls.length) {
-      this.balls.push({ x: 0, y: 0, vx: 0, vy: 0 });
-      this.correction.push({ x: 0, y: 0 });
-    }
-    this.balls.length = snap.balls.length;
-    this.correction.length = snap.balls.length;
-    const lead = RENDER_DELAY_MS / 1e3;
-    for (let i = 0; i < snap.balls.length; i++) {
-      const s = snap.balls[i];
-      const b = this.balls[i];
-      const tx = s.x + s.vx * lead;
-      const ty = s.y + s.vy * lead;
-      const ex = tx - b.x;
-      const ey = ty - b.y;
-      const err = Math.hypot(ex, ey);
-      if (err > CORRECTION_THRESHOLD) {
-        this.correction[i] = { x: ex, y: ey };
-      } else {
-        this.correction[i] = { x: 0, y: 0 };
-      }
-      b.vx = s.vx;
-      b.vy = s.vy;
-    }
-  }
-  /** Advances the local simulation by dt seconds (called every animation frame). */
-  step(dt) {
-    if (dt <= 0) return;
-    if (dt > MAX_FRAME_DT) dt = MAX_FRAME_DT;
-    for (let i = 0; i < this.balls.length; i++) {
-      const b = this.balls[i];
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
-      this.collideBall(b);
-      const c = this.correction[i];
-      const k = Math.min(1, dt * 1e3 / CORRECTION_MS);
-      b.x += c.x * k;
-      b.y += c.y * k;
-      c.x -= c.x * k;
-      c.y -= c.y * k;
-    }
-  }
-  collideBall(b) {
-    for (const seg of this.walls) {
-      const closest = closestPointOnSegment({ x: b.x, y: b.y }, seg);
-      const dx = b.x - closest.x;
-      const dy = b.y - closest.y;
-      const d = Math.hypot(dx, dy);
-      if (d >= this.ballRadius || d === 0) continue;
-      const nx = dx / d;
-      const ny = dy / d;
-      const dotv = b.vx * nx + b.vy * ny;
-      if (dotv < 0) {
-        b.vx -= 2 * dotv * nx;
-        b.vy -= 2 * dotv * ny;
-      }
-      b.x = closest.x + nx * this.ballRadius;
-      b.y = closest.y + ny * this.ballRadius;
-    }
-  }
-  getBalls() {
-    return this.balls;
-  }
-};
-var SnapshotBuffer = class {
-  constructor() {
-    this.snaps = [];
-  }
-  push(snap) {
-    this.snaps.push(snap);
-    if (this.snaps.length > 12) this.snaps.shift();
-  }
-  latest() {
-    return this.snaps.length ? this.snaps[this.snaps.length - 1] : null;
-  }
-  /** Returns player paddles interpolated to the given server time. */
-  playersAt(renderTime) {
-    const n = this.snaps.length;
-    if (n === 0) return null;
-    let a = this.snaps[0];
-    let b = this.snaps[n - 1];
-    for (let i = 0; i < n - 1; i++) {
-      const s0 = this.snaps[i];
-      const s1 = this.snaps[i + 1];
-      if (renderTime >= s0.t && renderTime <= s1.t) {
-        a = s0;
-        b = s1;
-        break;
-      }
-    }
-    if (renderTime > b.t) {
-      return b.players;
-    }
-    if (renderTime < a.t) {
-      return a.players;
-    }
-    const span = b.t - a.t || 1;
-    const f = (renderTime - a.t) / span;
-    const byId = /* @__PURE__ */ new Map();
-    for (const p of a.players) byId.set(p.id, p);
-    const out = [];
-    for (const pb of b.players) {
-      const pa = byId.get(pb.id);
-      if (!pa) {
-        out.push(pb);
-        continue;
-      }
-      out.push({
-        ...pb,
-        angle: pa.angle + (pb.angle - pa.angle) * f
-      });
-    }
-    return out;
-  }
-};
 
 // ../frontend/src/renderer.ts
 var PALETTE = ["#00f0ff", "#ff3df0", "#ffe600", "#39ff6a", "#ff7a00", "#9d6bff"];
@@ -379,7 +312,7 @@ var GameRenderer = class {
     this.drawPaddles(state);
     this.drawBalls(state);
     ctx.restore();
-    if (state.balls.length === 0 && state.snap.respawnIn && state.snap.respawnIn > 0) {
+    if (state.snap.state === "playing" && state.balls.length === 0 && state.snap.respawnIn && state.snap.respawnIn > 0) {
       this.drawCountdown(state.snap.respawnIn);
     }
   }
@@ -478,14 +411,15 @@ var GameRenderer = class {
     for (const b of state.balls) {
       ctx.save();
       ctx.shadowColor = "#00f0ff";
-      ctx.shadowBlur = 30;
-      const halo = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, this.ballRadius * 3.2);
-      halo.addColorStop(0, "rgba(255,255,255,1)");
-      halo.addColorStop(0.35, "rgba(0,240,255,0.9)");
+      ctx.shadowBlur = 12;
+      const glowR = this.ballRadius * 1.7;
+      const halo = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, glowR);
+      halo.addColorStop(0, "rgba(255,255,255,0.95)");
+      halo.addColorStop(0.45, "rgba(0,240,255,0.45)");
       halo.addColorStop(1, "rgba(0,240,255,0)");
       ctx.fillStyle = halo;
       ctx.beginPath();
-      ctx.arc(b.x, b.y, this.ballRadius * 3.2, 0, Math.PI * 2);
+      ctx.arc(b.x, b.y, glowR, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = "#ffffff";
       ctx.beginPath();
@@ -517,14 +451,14 @@ function renderLobby(snap, link) {
   list.innerHTML = "";
   snap.players.forEach((p, i) => {
     const li = document.createElement("li");
-    const dot2 = document.createElement("span");
-    dot2.className = "dot";
-    dot2.style.background = playerColor(i);
-    dot2.style.color = playerColor(i);
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    dot.style.background = playerColor(i);
+    dot.style.color = playerColor(i);
     const name = document.createElement("span");
     name.className = "pname";
     name.textContent = p.name + (p.isHost ? " \u2605" : "");
-    li.append(dot2, name);
+    li.append(dot, name);
     list.appendChild(li);
   });
   const isHost = snap.players.some((p) => p.id === snap.you && p.isHost);
@@ -537,16 +471,16 @@ function renderHUD(snap, elapsedSec) {
   for (const p of snap.players) {
     const item = document.createElement("div");
     item.className = "hud-player" + (p.isAlive ? "" : " dead");
-    const dot2 = document.createElement("span");
-    dot2.className = "dot";
-    dot2.style.background = playerColor(p.index);
-    dot2.style.color = playerColor(p.index);
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    dot.style.background = playerColor(p.index);
+    dot.style.color = playerColor(p.index);
     const name = document.createElement("span");
     name.textContent = p.name;
     const lives = document.createElement("span");
     lives.className = "lives";
     lives.textContent = p.isAlive ? "\u2665".repeat(Math.max(0, p.lives)) : "\u2715";
-    item.append(dot2, name, lives);
+    item.append(dot, name, lives);
     wrap.appendChild(item);
   }
   const m = Math.floor(elapsedSec / 60);
@@ -571,6 +505,9 @@ var latestSnap = null;
 var myAngle = 0.5;
 var serverMyAngle = 0.5;
 var inputDir = 0;
+var inputSeq = 0;
+var serverLastSeq = 0;
+var frameCounter = 0;
 var wasAlive = true;
 var playing = false;
 var rafId = 0;
@@ -661,7 +598,8 @@ function setKey(which, down) {
   if (dir !== inputDir) {
     inputDir = dir;
     const screenDir = renderer ? renderer.getFaceScreenDirX() : 1;
-    net?.send({ action: "move", dir: dir * screenDir });
+    inputSeq++;
+    net?.send({ action: "move", dir: dir * screenDir, seq: inputSeq });
   }
 }
 function getPlayerName() {
@@ -723,14 +661,17 @@ function connect(roomID) {
 function handleSnapshot(snap) {
   latestSnap = snap;
   buffer.push(snap);
-  physics.onSnapshot(snap);
+  physics.sync(snap);
   const me = snap.players.find((p) => p.id === snap.you);
   if (snap.state === "waiting") {
     playing = false;
     showScreen("lobby");
     renderLobby(snap, buildInviteLink(snap.roomID));
   } else if (snap.state === "playing") {
-    if (me) serverMyAngle = me.angle;
+    if (me) {
+      serverMyAngle = me.angle;
+      serverLastSeq = me.lastSeq ?? 0;
+    }
     if (!playing) {
       startPlaying(snap);
     } else if (me && !me.isAlive && wasAlive) {
@@ -754,7 +695,6 @@ function startPlaying(snap) {
   if (!renderer) renderer = new GameRenderer($("game-canvas"));
   renderer.resize();
   renderer.setup(snap.sides, snap.radius, snap.chamfer, snap.paddleHalf, snap.ballRadius, myIndex);
-  physics.setup(snap.sides, snap.radius, snap.chamfer, snap.ballRadius, snap.ballSpeed);
   if (!rafId && intervalId === null) {
     lastFrameTime = performance.now();
     startLoop();
@@ -786,15 +726,21 @@ function frame(now) {
   }
   const dt = Math.min(0.05, (now - lastFrameTime) / 1e3);
   lastFrameTime = now;
-  physics.step(dt);
+  frameCounter++;
+  if (frameCounter % 30 === 0) {
+    const latency = net ? net.getLatency() : 60;
+    physics.setDelay(Math.round(latency) + 50);
+  }
   stepMyPaddle(dt);
   if (renderer && latestSnap) {
-    const interp = buffer.playersAt(physics.renderTime) ?? latestSnap.players;
+    const renderTime = physics.renderTime;
+    const players = buffer.playersAt(renderTime) ?? latestSnap.players;
+    const balls = buffer.ballsAt(renderTime) ?? [];
     renderer.render({
       snap: latestSnap,
-      players: interp,
+      players,
       myAngle,
-      balls: physics.getBalls()
+      balls
     });
     renderHUD(latestSnap, (now - matchStartTime) / 1e3);
   }
@@ -811,7 +757,7 @@ function stepMyPaddle(dt) {
   if (dir !== 0) {
     myAngle += dir * screenDir * (speed / faceLen) * dt;
     myAngle = Math.max(half, Math.min(1 - half, myAngle));
-  } else {
+  } else if (inputSeq <= serverLastSeq) {
     myAngle += (serverMyAngle - myAngle) * Math.min(1, dt / 0.2);
   }
 }
@@ -819,12 +765,14 @@ function showGameOver(snap) {
   stopLoop();
   showScreen("game");
   if (renderer && latestSnap) {
-    const interp = buffer.playersAt(physics.renderTime) ?? latestSnap.players;
+    const renderTime = physics.renderTime;
+    const players = buffer.playersAt(renderTime) ?? latestSnap.players;
+    const balls = buffer.ballsAt(renderTime) ?? [];
     renderer.render({
       snap: latestSnap,
-      players: interp,
+      players,
       myAngle,
-      balls: physics.getBalls()
+      balls
     });
   }
   const winner = snap.players.find((p) => p.id === snap.winner);

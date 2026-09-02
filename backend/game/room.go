@@ -152,12 +152,18 @@ func (r *Room) RemovePlayer(id string) {
 	r.eliminateLocked(id)
 }
 
-// SetInput records the currently held movement direction for a player.
-func (r *Room) SetInput(id string, dir int) {
+// SetInput records the currently held movement direction for a player. seq is
+// the client's input sequence number, echoed back in snapshots so the client
+// can reconcile its local prediction.
+func (r *Room) SetInput(id string, dir int, seq uint32) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, p := range r.Players {
 		if p.ID == id {
+			// Ignore stale or duplicate inputs.
+			if seq < p.LastSeq {
+				return
+			}
 			if dir > 1 {
 				dir = 1
 			}
@@ -165,6 +171,7 @@ func (r *Room) SetInput(id string, dir int) {
 				dir = -1
 			}
 			p.InputDir = dir
+			p.LastSeq = seq
 			return
 		}
 	}
@@ -325,12 +332,13 @@ func (r *Room) RunLoop() {
 		}
 	}()
 
-	// Broadcast at 20 Hz: 60 / 20 = 3 ticks.
-	broadcastEvery := tickRate / 20
-	if broadcastEvery < 1 {
-		broadcastEvery = 1
+	// Broadcast snapshots at the configured rate (independent of the tick rate).
+	snapRate := cfg.SnapshotRate
+	if snapRate <= 0 {
+		snapRate = 20
 	}
-	tick := 0
+	snapInterval := time.Duration(float64(time.Second) / float64(snapRate))
+	nextBroadcast := time.Now().Add(snapInterval)
 	dt := 1.0 / float64(tickRate)
 
 	for {
@@ -339,9 +347,12 @@ func (r *Room) RunLoop() {
 			return
 		case <-ticker.C:
 			r.Update(dt)
-			tick++
-			if tick%broadcastEvery == 0 {
+			if time.Now().After(nextBroadcast) {
 				r.Broadcast()
+				nextBroadcast = nextBroadcast.Add(snapInterval)
+				if nextBroadcast.Before(time.Now()) {
+					nextBroadcast = time.Now().Add(snapInterval)
+				}
 			}
 		}
 	}
@@ -364,6 +375,7 @@ type snapshotPlayer struct {
 	Lives   int     `json:"lives"`
 	IsAlive bool    `json:"isAlive"`
 	IsHost  bool    `json:"isHost"`
+	LastSeq uint32  `json:"lastSeq"`
 }
 
 type snapshot struct {
@@ -418,6 +430,7 @@ func (r *Room) SnapshotJSON(youID string) []byte {
 			ID: p.ID, Name: p.Name, Index: p.Index,
 			Angle: p.Angle, Lives: p.Lives,
 			IsAlive: p.IsAlive, IsHost: p.IsHost,
+			LastSeq: p.LastSeq,
 		})
 	}
 	for _, b := range r.Balls {

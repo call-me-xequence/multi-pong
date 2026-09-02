@@ -113,7 +113,12 @@ export class GameRenderer {
 
     ctx.restore();
 
-    if (state.balls.length === 0 && state.snap.respawnIn && state.snap.respawnIn > 0) {
+    if (
+      state.snap.state === 'playing' &&
+      state.balls.length === 0 &&
+      state.snap.respawnIn &&
+      state.snap.respawnIn > 0
+    ) {
       this.drawCountdown(state.snap.respawnIn);
     }
   }
@@ -228,15 +233,17 @@ export class GameRenderer {
     for (const b of state.balls) {
       ctx.save();
       ctx.shadowColor = '#00f0ff';
-      ctx.shadowBlur = 30;
+      ctx.shadowBlur = 12;
 
-      const halo = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, this.ballRadius * 3.2);
-      halo.addColorStop(0, 'rgba(255,255,255,1)');
-      halo.addColorStop(0.35, 'rgba(0,240,255,0.9)');
+      // Tight halo so the glow no longer makes the ball look oversized.
+      const glowR = this.ballRadius * 1.7;
+      const halo = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, glowR);
+      halo.addColorStop(0, 'rgba(255,255,255,0.95)');
+      halo.addColorStop(0.45, 'rgba(0,240,255,0.45)');
       halo.addColorStop(1, 'rgba(0,240,255,0)');
       ctx.fillStyle = halo;
       ctx.beginPath();
-      ctx.arc(b.x, b.y, this.ballRadius * 3.2, 0, Math.PI * 2);
+      ctx.arc(b.x, b.y, glowR, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.fillStyle = '#ffffff';
