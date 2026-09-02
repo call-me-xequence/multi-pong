@@ -1,0 +1,12 @@
+# Build artifacts
+tools/
+backend/neonpong.exe
+backend/neonpong
+*.exe
+
+# Node
+frontend/node_modules/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,14 @@
+{
+  "name": "neon-pong-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "bundle": "esbuild src/main.ts --bundle --format=esm --target=es2020 --outfile=dist/main.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "esbuild": "^0.24.0"
+  }
+}

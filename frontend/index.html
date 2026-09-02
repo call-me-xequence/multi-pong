@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Neon Pong Battle</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- ===================== MENU ===================== -->
+    <section id="screen-menu" class="screen active">
+      <div class="menu-inner">
+        <h1 class="logo">NEON <span>PONG</span> BATTLE</h1>
+        <p class="tagline">Мультиплеерная аркада на выбывание · до 6 игроков</p>
+
+        <div class="card">
+          <label class="label" for="player-name">Имя игрока</label>
+          <input id="player-name" type="text" maxlength="16" placeholder="Player" />
+
+          <div class="row">
+            <input id="join-room-id" type="text" maxlength="16" placeholder="ID комнаты" />
+            <button id="btn-join" class="btn">Войти</button>
+          </div>
+
+          <div class="divider"><span>или</span></div>
+
+          <button id="btn-create" class="btn btn-accent">Создать комнату</button>
+
+          <div id="create-panel" class="create-panel hidden">
+            <div class="field">
+              <label>Игроков: <b id="val-max">4</b></label>
+              <input id="inp-max" type="range" min="2" max="6" step="1" value="4" />
+            </div>
+            <div class="field">
+              <label>Кол-во жизней: <b id="val-lives">3</b></label>
+              <input id="inp-lives" type="range" min="1" max="5" step="1" value="3" />
+            </div>
+            <div class="field field-inline">
+              <label for="inp-accel">Ускорение мяча</label>
+              <input id="inp-accel" type="checkbox" checked />
+            </div>
+            <div class="field">
+              <label>Доп. мячи: <b id="val-ball">15 сек</b></label>
+              <input id="inp-ball" type="range" min="0" max="30" step="5" value="15" />
+            </div>
+            <button id="btn-create-go" class="btn btn-accent">Создать</button>
+          </div>
+        </div>
+
+        <div id="menu-error" class="error hidden"></div>
+      </div>
+    </section>
+
+    <!-- ===================== LOBBY ===================== -->
+    <section id="screen-lobby" class="screen">
+      <div class="menu-inner">
+        <div class="card lobby-card">
+          <h2>Комната <span id="lobby-room-id" class="accent"></span></h2>
+          <p class="hint">Пригласите друзей — отправьте ссылку или ID комнаты</p>
+          <div class="row">
+            <input id="lobby-link" type="text" readonly />
+            <button id="btn-copy" class="btn">Копировать</button>
+          </div>
+          <ul id="lobby-players" class="player-list"></ul>
+          <p id="lobby-status" class="hint"></p>
+          <button id="btn-start" class="btn btn-accent hidden">Начать игру</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== GAME ===================== -->
+    <section id="screen-game" class="screen">
+      <canvas id="game-canvas"></canvas>
+      <div id="hud" class="hud">
+        <div id="hud-players" class="hud-players"></div>
+        <div id="hud-time" class="hud-time">0:00</div>
+      </div>
+      <div id="toast" class="toast hidden"></div>
+      <div id="game-over" class="overlay hidden">
+        <h2 id="game-over-text">Победа!</h2>
+        <p id="game-over-players" class="hint"></p>
+        <div class="row game-over-actions">
+          <button id="btn-restart" class="btn btn-accent hidden">Играть снова</button>
+          <button id="btn-again" class="btn">В меню</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script type="module" src="dist/main.js"></script>
+</body>
+</html>

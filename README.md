@@ -1,0 +1,112 @@
+# Neon Pong Battle
+
+Мультиплеерная неоновая аркада на выбывание для 2–6 игроков.
+
+Поле — правильный многоугольник (N-угольник по числу игроков) со срезанными
+углами (фасками), чтобы мяч не застревал. Каждая грань — «ворота» одного игрока.
+Игрок двигает ракетку вдоль своей грани и отбивает мяч. Пропустил гол — потерял
+жизнь; кончились жизни — вылетел, его сектор закрывается стеной.
+
+## Архитектура
+
+| Слой | Технология | Где |
+|------|------------|-----|
+| Сервер (API + физика) | Go, Gin, Gorilla WebSocket | `backend/` |
+| Клиент | TypeScript, Canvas 2D, WebSocket | `frontend/` |
+| Раздача статики и прокси | nginx | `nginx.conf` |
+| Деплой | Docker / docker-compose | `Dockerfile` (в `backend/`), `docker-compose.yml` |
+
+**Сеть:** серверный тик 60 Гц, снапшоты клиентам — 20 Гц. Клиент предсказывает
+мяч и свою ракетку локально (Client-Side Prediction), а ракетки других игроков
+интерполирует между снапшотами — картинка остаётся плавной.
+
+## Структура проекта
+
+```
+backend/
+  main.go                 # точка входа, маршруты, CORS, опц. раздача статики
+  go.mod
+  geometry/geometry.go    # GeneratePolygon, ChamferVertices, отрезки
+  game/                   # Room, Player, Ball, GameConfig, физика (Update)
+  server/                 # Hub (комнаты), REST, WebSocket хэндлер
+  Dockerfile
+frontend/
+  index.html
+  css/style.css
+  src/
+    main.ts               # экраны, игровой цикл, ввод
+    net.ts                # WebSocket + измерение пинга
+    physics.ts            # LocalPhysics (предсказание) + SnapshotBuffer
+    renderer.ts           # неоновая отрисовка + поворот камеры
+    geometry.ts           # зеркало серверной геометрии
+    ui.ts                 # DOM-помощники
+    types.ts
+  tsconfig.json
+  package.json
+  dist/main.js            # собранный бандл (уже включён)
+nginx.conf
+docker-compose.yml
+```
+
+## Быстрый старт (локально, без Docker)
+
+Нужен Go 1.22+.
+
+```bash
+# 1. Собрать фронтенд (нужен Node) — либо уже готовый dist/main.js
+cd frontend
+npm install
+npm run bundle          # esbuild -> dist/main.js
+
+# 2. Запустить сервер с раздачей статики
+cd ../backend
+$env:STATIC_DIR="../frontend"   # Windows PowerShell
+export STATIC_DIR=../frontend   # Linux/macOS
+go run .
+```
+
+Откройте `http://localhost:8080`.
+
+> Если фронтенд уже собран (`frontend/dist/main.js`), этап 1 можно пропустить.
+
+## Запуск через Docker Compose
+
+```bash
+docker compose up --build
+```
+
+Откройте `http://<IP-сервера>/`. nginx отдаёт статику и проксирует `/ws`,
+`/create-room`, `/rooms` в Go-бэкенд.
+
+## Как играть
+
+1. Нажмите **«Создать комнату»**, настройте:
+   - число игроков (2–6),
+   - количество жизней (1–5),
+   - ускорение мяча (вкл/выкл, +5% каждые 10 сек),
+   - интервал появления новых мячей (10–30 сек, до 3 мячей).
+2. Скопируйте ссылку или ID комнаты и отправьте друзьям.
+3. Когда все на месте, создатель жмёт **«Начать игру»** (или игра стартует сама
+   при заполнении комнаты).
+4. Управление: **←/→** или **A/D** — ракетка всегда движется вдоль вашей грани,
+   которая после поворота камеры оказывается внизу экрана.
+5. HUD сверху показывает жизни игроков и время матча. Выбывший сектор
+   подсвечивается красным и становится стеной.
+
+## REST API
+
+- `POST /create-room` — тело: `{ "maxPlayers": 4, "livesCount": 3, "ballAccel": true, "addBallTime": 15 }` → `{ "roomID": "..." }`
+- `GET /rooms` — список активных комнат.
+
+## WebSocket
+
+- URL: `/ws?roomID=X&playerName=Y`
+- Клиент → сервер:
+  - `{ "action": "move", "dir": 1 }` — `1`/`-1`/`0` (движение по грани)
+  - `{ "action": "start" }` — запуск создателем
+  - `{ "action": "ping", "c": <clientTime> }` — замер задержки
+- Сервер → клиент: `welcome`, `snapshot` (20 Гц), `pong`, `error`.
+
+Снапшот содержит `t`, `state`, `you`, геометрию (`sides`, `radius`, `chamfer`,
+`paddleHalf`, `paddleSpeed`, `ballRadius`, `ballSpeed`), массив `balls`
+(`x,y,vx,vy`) и массив `players` (`id,name,index,angle,lives,isAlive,isHost`).
