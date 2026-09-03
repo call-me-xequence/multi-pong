@@ -69,6 +69,10 @@
             <label>Доп. мячи: <b id="val-ball">15 сек</b></label>
             <input id="inp-ball" type="range" min="0" max="30" step="5" value="15" />
           </div>
+          <div class="field field-inline">
+            <label for="inp-items">Предметы</label>
+            <input id="inp-items" type="checkbox" checked />
+          </div>
 
           <button id="btn-create-go" class="btn btn-accent btn-block" type="button">Создать комнату</button>
           <div id="create-error" class="error hidden"></div>
@@ -121,6 +125,10 @@
         <div id="hud-players" class="hud-players"></div>
         <div id="hud-time" class="hud-time">0:00</div>
       </div>
+      <div id="item-slot" class="item-slot hidden">
+        <canvas id="item-slot-canvas" width="64" height="64"></canvas>
+        <span id="item-slot-hint">Пробел — использовать</span>
+      </div>
       <div id="toast" class="toast hidden"></div>
       <div id="game-over" class="overlay hidden">
         <h2 id="game-over-text">Победа!</h2>
@@ -138,6 +146,10 @@
           <div class="field">
             <label>Доп. мячи: <b id="go-ball-val">15 сек</b></label>
             <input id="go-ball" type="range" min="0" max="30" step="5" value="15" />
+          </div>
+          <div class="field field-inline">
+            <label for="go-items">Предметы</label>
+            <input id="go-items" type="checkbox" />
           </div>
         </div>
 

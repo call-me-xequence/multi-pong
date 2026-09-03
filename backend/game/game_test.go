@@ -557,14 +557,14 @@ func TestKickAndUpdateConfig(t *testing.T) {
 	}
 
 	// Host updates match settings.
-	if err := r.UpdateConfig("a", 4, true, 20); err != nil {
+	if err := r.UpdateConfig("a", 4, true, 20, true); err != nil {
 		t.Fatalf("update config: %v", err)
 	}
-	if r.Config.Lives != 4 || !r.Config.BallAccel || r.Config.AddBallInterval != 20 {
+	if r.Config.Lives != 4 || !r.Config.BallAccel || r.Config.AddBallInterval != 20 || !r.Config.Items {
 		t.Fatalf("config not applied: %+v", r.Config)
 	}
 	// Non-host cannot update config.
-	if err := r.UpdateConfig("b", 1, false, 0); err == nil {
+	if err := r.UpdateConfig("b", 1, false, 0, false); err == nil {
 		t.Fatal("non-host config update should fail")
 	}
 }

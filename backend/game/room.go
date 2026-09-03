@@ -50,6 +50,7 @@ type Room struct {
 	lastAccelAt      time.Time
 	lastAddBallAt    time.Time
 	nextBallAt       time.Time // when the next ball spawns after a goal (zero = none pending)
+	nextItemAt       time.Time // when the next item drops (zero = items disabled/stopped)
 	history          []historyEntry
 
 	done   chan struct{}
@@ -59,6 +60,21 @@ type Room struct {
 // ballState and playerState capture the parts of the world needed to rewind.
 type ballState struct {
 	X, Y, VX, VY float64
+	// Item state (must survive a rewind so effects aren't lost).
+	SpeedMul     float64
+	OnFire       bool
+	Curve        int
+	Sticky       bool
+	StuckUntil   time.Time
+	StuckToP     string
+	StuckT       float64
+	StuckNX      float64
+	StuckNY      float64
+	IsFake       bool
+	FakeOwner    string
+	TetherOwner  string
+	TetherTarget string
+	TetherHits   int
 }
 
 type playerState struct {
@@ -357,7 +373,14 @@ func (r *Room) pushHistoryLocked() {
 		winnerID:         r.WinnerID,
 	}
 	for _, b := range r.Balls {
-		e.balls = append(e.balls, ballState{X: b.X, Y: b.Y, VX: b.VX, VY: b.VY})
+		e.balls = append(e.balls, ballState{
+			X: b.X, Y: b.Y, VX: b.VX, VY: b.VY,
+			SpeedMul: b.SpeedMul, OnFire: b.OnFire, Curve: b.Curve, Sticky: b.Sticky,
+			StuckUntil: b.StuckUntil, StuckToP: b.StuckToP, StuckT: b.StuckT,
+			StuckNX: b.StuckNX, StuckNY: b.StuckNY,
+			IsFake: b.IsFake, FakeOwner: b.FakeOwner,
+			TetherOwner: b.TetherOwner, TetherTarget: b.TetherTarget, TetherHits: b.TetherHits,
+		})
 	}
 	for _, p := range r.Players {
 		e.players = append(e.players, playerState{
@@ -385,7 +408,14 @@ func (r *Room) restoreLocked(snap *historyEntry) {
 
 	r.Balls = r.Balls[:0]
 	for _, bs := range snap.balls {
-		r.Balls = append(r.Balls, &Ball{X: bs.X, Y: bs.Y, VX: bs.VX, VY: bs.VY, Radius: r.Config.BallRadius})
+		r.Balls = append(r.Balls, &Ball{
+			X: bs.X, Y: bs.Y, VX: bs.VX, VY: bs.VY, Radius: r.Config.BallRadius,
+			SpeedMul: bs.SpeedMul, OnFire: bs.OnFire, Curve: bs.Curve, Sticky: bs.Sticky,
+			StuckUntil: bs.StuckUntil, StuckToP: bs.StuckToP, StuckT: bs.StuckT,
+			StuckNX: bs.StuckNX, StuckNY: bs.StuckNY,
+			IsFake: bs.IsFake, FakeOwner: bs.FakeOwner,
+			TetherOwner: bs.TetherOwner, TetherTarget: bs.TetherTarget, TetherHits: bs.TetherHits,
+		})
 	}
 	for i := range r.Players {
 		if i >= len(snap.players) {
@@ -421,7 +451,7 @@ func (r *Room) Start(hostID string) error {
 
 // UpdateConfig changes the room's match settings (host only, outside a running
 // match). Used before the first start and for a rematch.
-func (r *Room) UpdateConfig(hostID string, lives int, accel bool, addBallTime int) error {
+func (r *Room) UpdateConfig(hostID string, lives int, accel bool, addBallTime int, items bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -445,6 +475,7 @@ func (r *Room) UpdateConfig(hostID string, lives int, accel bool, addBallTime in
 	}
 	r.Config.Lives = lives
 	r.Config.BallAccel = accel
+	r.Config.Items = items
 	if addBallTime > 0 {
 		r.Config.AddBallInterval = float64(addBallTime)
 	} else {
@@ -467,6 +498,8 @@ func (r *Room) startLocked() {
 	r.currentBallSpeed = cfg.BallSpeed
 	r.Balls = r.Balls[:0]
 	r.spawnBallLocked(0)
+	r.clearBallItemsLocked()
+	r.resetItemsLocked()
 
 	now := time.Now()
 	r.startedAt = now
@@ -686,21 +719,34 @@ func (r *Room) RunLoop() {
 // --- Snapshot / broadcast ---------------------------------------------------
 
 type snapshotBall struct {
-	X  float64 `json:"x"`
-	Y  float64 `json:"y"`
-	VX float64 `json:"vx"`
-	VY float64 `json:"vy"`
+	X            float64 `json:"x"`
+	Y            float64 `json:"y"`
+	VX           float64 `json:"vx"`
+	VY           float64 `json:"vy"`
+	Fire         bool    `json:"fire,omitempty"`
+	Cv           int     `json:"cv,omitempty"` // curve hits remaining (0 = not curving)
+	Sticky       bool    `json:"sticky,omitempty"`
+	Stuck        float64 `json:"stuck,omitempty"` // seconds still stuck
+	Fake         bool    `json:"fake,omitempty"`
+	Tether       bool    `json:"tether,omitempty"`
+	TetherTarget string  `json:"tt,omitempty"`
+	TetherHits   int     `json:"th,omitempty"`
 }
 
 type snapshotPlayer struct {
-	ID      string  `json:"id"`
-	Name    string  `json:"name"`
-	Index   int     `json:"index"`
-	Angle   float64 `json:"angle"`
-	Lives   int     `json:"lives"`
-	IsAlive bool    `json:"isAlive"`
-	IsHost  bool    `json:"isHost"`
-	LastSeq uint32  `json:"lastSeq"`
+	ID      string             `json:"id"`
+	Name    string             `json:"name"`
+	Index   int                `json:"index"`
+	Angle   float64            `json:"angle"`
+	Lives   int                `json:"lives"`
+	IsAlive bool               `json:"isAlive"`
+	IsHost  bool               `json:"isHost"`
+	LastSeq uint32             `json:"lastSeq"`
+	Item    string             `json:"item,omitempty"` // held item ("" = none)
+	Fx      map[string]float64 `json:"fx,omitempty"`   // effect -> seconds left
+	Arm     string             `json:"arm,omitempty"`  // armed one-shot waiting for contact
+	Use     string             `json:"use,omitempty"`  // item used a moment ago (icon key)
+	UseT    float64            `json:"useT,omitempty"` // seconds the "just used" icon remains
 }
 
 type snapshot struct {
@@ -722,6 +768,7 @@ type snapshot struct {
 	Lives       int              `json:"lives"`
 	BallAccel   bool             `json:"ballAccel"`
 	AddBallTime int              `json:"addBallTime"`
+	Items       bool             `json:"items"`
 	Players     []snapshotPlayer `json:"players"`
 	Balls       []snapshotBall   `json:"balls"`
 }
@@ -750,6 +797,7 @@ func (r *Room) SnapshotJSON(youID string) []byte {
 		Lives:       r.Config.Lives,
 		BallAccel:   r.Config.BallAccel,
 		AddBallTime: int(r.Config.AddBallInterval),
+		Items:       r.Config.Items,
 		Players:     make([]snapshotPlayer, 0, len(r.Players)),
 		Balls:       make([]snapshotBall, 0, len(r.Balls)),
 	}
@@ -757,15 +805,51 @@ func (r *Room) SnapshotJSON(youID string) []byte {
 		s.Winner = r.WinnerID
 	}
 	for _, p := range r.Players {
+		fx := map[string]float64{}
+		if t := p.ShieldT; t.After(now) {
+			fx["shield"] = t.Sub(now).Seconds()
+		}
+		if t := p.FireArmT; t.After(now) {
+			fx["fire"] = t.Sub(now).Seconds()
+		}
+		if t := p.StickyArmT; t.After(now) {
+			fx["sticky"] = t.Sub(now).Seconds()
+		}
+		if t := p.FrozenT; t.After(now) {
+			fx["frozen"] = t.Sub(now).Seconds()
+		}
+		if t := p.BlindT; t.After(now) {
+			fx["blind"] = t.Sub(now).Seconds()
+		}
+		if t := p.ShakeT; t.After(now) {
+			fx["shake"] = t.Sub(now).Seconds()
+		}
+		if len(fx) == 0 {
+			fx = nil
+		}
 		s.Players = append(s.Players, snapshotPlayer{
 			ID: p.ID, Name: p.Name, Index: p.Index,
 			Angle: p.Angle, Lives: p.Lives,
 			IsAlive: p.IsAlive, IsHost: p.IsHost,
 			LastSeq: p.LastSeq,
+			Item:    itemKey(p.Item),
+			Fx:      fx,
+			Arm:     playerArmKey(p),
+			Use:     playerUseKey(p, now),
+			UseT:    playerUseSec(p, now),
 		})
 	}
 	for _, b := range r.Balls {
-		s.Balls = append(s.Balls, snapshotBall{X: b.X, Y: b.Y, VX: b.VX, VY: b.VY})
+		stuck := 0.0
+		if !b.StuckUntil.IsZero() && b.StuckUntil.After(now) {
+			stuck = b.StuckUntil.Sub(now).Seconds()
+		}
+		s.Balls = append(s.Balls, snapshotBall{
+			X: b.X, Y: b.Y, VX: b.VX, VY: b.VY,
+			Fire: b.OnFire, Cv: b.Curve, Sticky: b.Sticky, Stuck: stuck,
+			Fake: b.IsFake, Tether: b.TetherTarget != "",
+			TetherTarget: b.TetherTarget, TetherHits: b.TetherHits,
+		})
 	}
 
 	data, err := json.Marshal(s)

@@ -2,6 +2,7 @@
 
 import type { Snapshot, RoomInfo } from './types.js';
 import { playerColor } from './renderer.js';
+import { drawItemIcon, itemDef } from './items.js';
 
 export function $(id: string): HTMLElement {
   return document.getElementById(id) as HTMLElement;
@@ -181,4 +182,28 @@ export function showToast(msg: string, ms = 3000): void {
   t.textContent = msg;
   t.classList.remove('hidden');
   window.setTimeout(() => t.classList.add('hidden'), ms);
+}
+
+/** Updates the item slot box (right of the field) with the held item of me. */
+export function updateItemSlot(snap: Snapshot): void {
+  const slot = $('item-slot');
+  const cv = $('item-slot-canvas') as HTMLCanvasElement;
+  const hint = $('item-slot-hint');
+  slot.classList.toggle('hidden', !snap.items);
+  if (!snap.items) return;
+
+  const me = snap.players.find((p) => p.id === snap.you);
+  const key = me?.item || '';
+  const ctx = cv.getContext('2d');
+  if (ctx) {
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (key) {
+      drawItemIcon(ctx, key, cv.width / 2, cv.height / 2, cv.width * 0.34);
+    }
+  }
+  const def = itemDef(key);
+  hint.textContent = key ? (def ? def.name : 'Предмет') : '—';
+  hint.classList.toggle('hidden', !key);
+  if (key) slot.classList.add('flash');
+  else slot.classList.remove('flash');
 }

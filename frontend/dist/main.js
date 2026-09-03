@@ -160,6 +160,7 @@ function buildWalls(sides, radius, chamfer) {
 
 // ../frontend/src/physics.ts
 var RENDER_DELAY_MS = 80;
+var CURVE_RATE = 3.5;
 var CORRECTION_MS = 100;
 var CORRECTION_THRESHOLD = 20;
 var MAX_FRAME_DT = 0.05;
@@ -205,7 +206,7 @@ var LocalPhysics = class {
   onSnapshot(snap) {
     while (this.balls.length < snap.balls.length) {
       const s = snap.balls[this.balls.length];
-      this.balls.push({ x: s.x, y: s.y, vx: s.vx, vy: s.vy });
+      this.balls.push({ x: s.x, y: s.y, vx: s.vx, vy: s.vy, curve: s.cv ?? 0 });
       this.corrections.push({ x: 0, y: 0 });
     }
     this.balls.length = snap.balls.length;
@@ -214,6 +215,7 @@ var LocalPhysics = class {
     for (let i = 0; i < snap.balls.length; i++) {
       const s = snap.balls[i];
       const b = this.balls[i];
+      b.curve = s.cv ?? 0;
       const tx = s.x + s.vx * lead;
       const ty = s.y + s.vy * lead;
       const ex = tx - b.x;
@@ -230,6 +232,14 @@ var LocalPhysics = class {
     if (dt > MAX_FRAME_DT) dt = MAX_FRAME_DT;
     for (let i = 0; i < this.balls.length; i++) {
       const b = this.balls[i];
+      if (b.curve > 0) {
+        const ang = CURVE_RATE * dt;
+        const c2 = Math.cos(ang);
+        const s = Math.sin(ang);
+        const nx = b.vx * c2 - b.vy * s;
+        b.vy = b.vx * s + b.vy * c2;
+        b.vx = nx;
+      }
       b.x += b.vx * dt;
       b.y += b.vy * dt;
       this.collideBall(b);
@@ -322,12 +332,252 @@ var SnapshotBuffer = class {
   }
 };
 
+// ../frontend/src/items.ts
+var ITEMS = [
+  { key: "fire", name: "\u0413\u043E\u0440\u044F\u0449\u0438\u0439 \u043C\u044F\u0447", desc: "+50% \u043A \u0441\u043A\u043E\u0440\u043E\u0441\u0442\u0438 \u043C\u044F\u0447\u0430", color: "#ffb020", dark: "#ff3d00" },
+  { key: "flash", name: "\u041E\u0441\u043B\u0435\u043F\u043B\u0435\u043D\u0438\u0435", desc: "\u0412\u0441\u043F\u044B\u0448\u043A\u0430 \u043E\u0441\u043B\u0435\u043F\u043B\u044F\u0435\u0442 \u0432\u0441\u0435\u0445 \u0441\u043E\u043F\u0435\u0440\u043D\u0438\u043A\u043E\u0432", color: "#ffffff", dark: "#ffe9a8" },
+  { key: "curve", name: "\u041A\u0440\u0443\u0447\u0451\u043D\u044B\u0439", desc: "\u041C\u044F\u0447 \u043B\u0435\u0442\u0438\u0442 \u043F\u043E \u0434\u0443\u0433\u0435", color: "#4dd0ff", dark: "#0b6fff" },
+  { key: "shield", name: "\u0417\u0430\u0449\u0438\u0442\u0430", desc: "\u0412\u043E\u0440\u043E\u0442\u0430 \u043D\u0435\u043F\u0440\u043E\u0431\u0438\u0432\u0430\u0435\u043C\u044B 8 \u0441\u0435\u043A", color: "#e8eef2", dark: "#8fa6b5" },
+  { key: "freeze", name: "\u0417\u0430\u043C\u043E\u0440\u043E\u0437\u043A\u0430", desc: "\u041C\u043E\u0440\u043E\u0437\u0438\u0442 \u0441\u043B\u0443\u0447\u0430\u0439\u043D\u043E\u0433\u043E \u0441\u043E\u043F\u0435\u0440\u043D\u0438\u043A\u0430", color: "#aee6ff", dark: "#4fc3f7" },
+  { key: "fake", name: "\u041E\u0431\u043C\u0430\u043D\u043A\u0430", desc: "\u0414\u0432\u0430 \u0437\u0435\u0440\u043A\u0430\u043B\u044C\u043D\u044B\u0445 \u043C\u044F\u0447\u0430", color: "#d18bff", dark: "#8e24aa" },
+  { key: "sticky", name: "\u041B\u0438\u043F\u0443\u0447\u043A\u0430", desc: "\u041C\u044F\u0447 \u043B\u0438\u043F\u043D\u0435\u0442 \u043A \u043F\u043E\u0432\u0435\u0440\u0445\u043D\u043E\u0441\u0442\u044F\u043C", color: "#a9ff4d", dark: "#3fa72f" },
+  { key: "tether", name: "\u0421\u0432\u044F\u0437\u044B\u0432\u0430\u043D\u0438\u0435", desc: "\u041F\u0440\u0438\u0432\u044F\u0437\u044B\u0432\u0430\u0435\u0442 \u043C\u044F\u0447 \u043A \u043A\u0430\u0440\u0435\u0442\u043A\u0435", color: "#d8a06a", dark: "#8a5a2b" },
+  { key: "shake", name: "\u0420\u0435\u0436\u0438\u043C \u0442\u0440\u044F\u0441\u043A\u0438", desc: "\u0422\u0440\u044F\u0441\u043A\u0430 \u044D\u043A\u0440\u0430\u043D\u0430 \u0443 \u0432\u0441\u0435\u0445", color: "#ff8a4d", dark: "#c0392b" }
+];
+var BY_KEY = /* @__PURE__ */ new Map();
+for (const it of ITEMS) BY_KEY.set(it.key, it);
+function itemDef(key) {
+  if (!key) return null;
+  return BY_KEY.get(key) || null;
+}
+function drawItemIcon(ctx, key, cx, cy, r) {
+  const def = itemDef(key);
+  if (!def) return;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.shadowColor = def.color;
+  ctx.shadowBlur = r * 0.8;
+  ctx.lineJoin = "round";
+  switch (key) {
+    case "fire":
+      flame(ctx, r);
+      break;
+    case "flash":
+      burst(ctx, r);
+      break;
+    case "curve":
+      swirl(ctx, r);
+      break;
+    case "shield":
+      shieldIcon(ctx, r);
+      break;
+    case "freeze":
+      snowflake(ctx, r);
+      break;
+    case "fake":
+      doubleBall(ctx, r);
+      break;
+    case "sticky":
+      droplet(ctx, r);
+      break;
+    case "tether":
+      ropeKnot(ctx, r);
+      break;
+    case "shake":
+      volcano(ctx, r);
+      break;
+  }
+  ctx.restore();
+}
+function flame(ctx, r) {
+  const g = ctx.createLinearGradient(0, r, 0, -r);
+  g.addColorStop(0, "#ff3d00");
+  g.addColorStop(0.55, "#ff9100");
+  g.addColorStop(1, "#ffea00");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(0, -r);
+  ctx.bezierCurveTo(r * 0.8, -r * 0.15, r * 0.65, r * 0.55, 0, r);
+  ctx.bezierCurveTo(-r * 0.65, r * 0.55, -r * 0.8, -r * 0.15, 0, -r);
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.beginPath();
+  ctx.moveTo(0, -r * 0.45);
+  ctx.bezierCurveTo(r * 0.35, -r * 0.05, r * 0.22, r * 0.3, 0, r * 0.45);
+  ctx.bezierCurveTo(-r * 0.22, r * 0.3, -r * 0.35, -r * 0.05, 0, -r * 0.45);
+  ctx.fill();
+}
+function burst(ctx, r) {
+  ctx.fillStyle = "#ffffff";
+  ctx.strokeStyle = "#ffe9a8";
+  ctx.lineWidth = r * 0.14;
+  for (let i = 0; i < 8; i++) {
+    const a = i / 8 * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * r * 0.3, Math.sin(a) * r * 0.3);
+    ctx.lineTo(Math.cos(a) * r * 1.15, Math.sin(a) * r * 1.15);
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.42, 0, Math.PI * 2);
+  ctx.fill();
+}
+function swirl(ctx, r) {
+  ctx.strokeStyle = "#0b6fff";
+  ctx.lineWidth = r * 0.22;
+  ctx.beginPath();
+  for (let i = 0; i < 40; i++) {
+    const t = i / 40;
+    const a = t * Math.PI * 3.4;
+    const rad = r * (0.25 + 0.75 * t);
+    const x = Math.cos(a) * rad;
+    const y = Math.sin(a) * rad;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.fillStyle = "#4dd0ff";
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.32, 0, Math.PI * 2);
+  ctx.fill();
+}
+function shieldIcon(ctx, r) {
+  ctx.fillStyle = "#dfe7ec";
+  ctx.strokeStyle = "#8fa6b5";
+  ctx.lineWidth = r * 0.16;
+  ctx.beginPath();
+  ctx.moveTo(0, -r);
+  ctx.quadraticCurveTo(r, -r * 0.55, r, 0);
+  ctx.quadraticCurveTo(r, r * 0.6, 0, r);
+  ctx.quadraticCurveTo(-r, r * 0.6, -r, 0);
+  ctx.quadraticCurveTo(-r, -r * 0.55, 0, -r);
+  ctx.fill();
+  ctx.stroke();
+  ctx.strokeStyle = "#6e8796";
+  ctx.lineWidth = r * 0.18;
+  ctx.beginPath();
+  ctx.moveTo(0, -r * 0.7);
+  ctx.lineTo(0, r * 0.75);
+  ctx.moveTo(-r * 0.62, 0);
+  ctx.lineTo(r * 0.62, 0);
+  ctx.stroke();
+}
+function snowflake(ctx, r) {
+  ctx.strokeStyle = "#7fd8ff";
+  ctx.lineWidth = r * 0.18;
+  ctx.lineCap = "round";
+  for (let i = 0; i < 6; i++) {
+    const a = i / 6 * Math.PI * 2;
+    const dx = Math.cos(a);
+    const dy = Math.sin(a);
+    ctx.beginPath();
+    ctx.moveTo(dx * r * 0.2, dy * r * 0.2);
+    ctx.lineTo(dx * r, dy * r);
+    ctx.stroke();
+    const bx = dx * r * 0.7;
+    const by = dy * r * 0.7;
+    ctx.beginPath();
+    ctx.moveTo(bx - dy * r * 0.22, by + dx * r * 0.22);
+    ctx.lineTo(bx + dy * r * 0.22, by - dx * r * 0.22);
+    ctx.stroke();
+  }
+  ctx.fillStyle = "#d7f2ff";
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.22, 0, Math.PI * 2);
+  ctx.fill();
+}
+function doubleBall(ctx, r) {
+  ctx.fillStyle = "#b06bff";
+  ctx.strokeStyle = "#d18bff";
+  ctx.lineWidth = r * 0.1;
+  ctx.beginPath();
+  ctx.arc(-r * 0.5, 0, r * 0.55, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(r * 0.5, 0, r * 0.55, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.arc(r * 0.5, -r * 0.15, r * 0.18, 0, Math.PI * 2);
+  ctx.fill();
+}
+function droplet(ctx, r) {
+  const g = ctx.createLinearGradient(0, -r, 0, r);
+  g.addColorStop(0, "#c6ff6b");
+  g.addColorStop(1, "#2e9e35");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(0, -r);
+  ctx.bezierCurveTo(r * 0.95, r * 0.2, r * 0.6, r, 0, r);
+  ctx.bezierCurveTo(-r * 0.6, r, -r * 0.95, r * 0.2, 0, -r);
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.6)";
+  ctx.beginPath();
+  ctx.arc(-r * 0.3, r * 0.25, r * 0.24, 0, Math.PI * 2);
+  ctx.fill();
+}
+function ropeKnot(ctx, r) {
+  ctx.strokeStyle = "#8a5a2b";
+  ctx.lineWidth = r * 0.2;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(-r, -r * 0.6);
+  ctx.quadraticCurveTo(0, r * 0.1, r, -r * 0.6);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-r, r * 0.6);
+  ctx.quadraticCurveTo(0, -r * 0.1, r, r * 0.6);
+  ctx.stroke();
+  ctx.strokeStyle = "#d8a06a";
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.3, 0, Math.PI * 2);
+  ctx.stroke();
+}
+function volcano(ctx, r) {
+  ctx.fillStyle = "#7b4a2b";
+  ctx.beginPath();
+  ctx.moveTo(0, -r * 0.45);
+  ctx.lineTo(r * 0.85, r);
+  ctx.lineTo(-r * 0.85, r);
+  ctx.closePath();
+  ctx.fill();
+  const g = ctx.createLinearGradient(0, -r * 0.5, 0, r);
+  g.addColorStop(0, "#ffcc33");
+  g.addColorStop(1, "#e6482f");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(0, -r * 0.45);
+  ctx.quadraticCurveTo(r * 0.2, r * 0.2, 0, r * 0.5);
+  ctx.quadraticCurveTo(-r * 0.2, r * 0.2, 0, -r * 0.45);
+  ctx.fill();
+}
+
 // ../frontend/src/renderer.ts
 var PALETTE = ["#00f0ff", "#ff3df0", "#ffe600", "#39ff6a", "#ff7a00", "#9d6bff"];
 function playerColor(index) {
   return PALETTE[(index % PALETTE.length + PALETTE.length) % PALETTE.length];
 }
+function paddleFxKey(p) {
+  const fx = p.fx;
+  if (fx && (fx.fire ?? 0) > 0) return "fire";
+  if (fx && (fx.sticky ?? 0) > 0) return "sticky";
+  if (fx && (fx.shield ?? 0) > 0) return "shield";
+  if (p.use && (p.useT ?? 0) > 0) return p.use;
+  if (p.arm) return p.arm;
+  return null;
+}
+function ballColor(fx) {
+  if (!fx) return "#00f0ff";
+  if (fx.fire) return "#ffb020";
+  if (fx.sticky) return "#7bff5a";
+  if ((fx.cv ?? 0) > 0) return "#4dd0ff";
+  if (fx.fake || fx.tether) return "#c084fc";
+  return "#00f0ff";
+}
 var GameRenderer = class {
+  // key -> first-seen ms, pop anims
   constructor(canvas) {
     this.canvas = canvas;
     this.walls = [];
@@ -337,6 +587,7 @@ var GameRenderer = class {
     this.ballRadius = 9;
     this.sides = 6;
     this.myIndex = 0;
+    this.fxSeen = /* @__PURE__ */ new Map();
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("2D context unavailable");
     this.ctx = ctx;
@@ -369,6 +620,10 @@ var GameRenderer = class {
     const sx = t.x * Math.cos(cam) - t.y * Math.sin(cam);
     return sx >= 0 ? 1 : -1;
   }
+  meFx(state) {
+    const me = state.snap.players.find((p) => p.id === state.snap.you);
+    return me ? me.fx : void 0;
+  }
   render(state) {
     const ctx = this.ctx;
     if (this.canvas.width === 0 || this.canvas.height === 0) this.resize();
@@ -384,17 +639,50 @@ var GameRenderer = class {
     const scale = this.fitScale(w, h);
     const cx = w / 2;
     const cy = h / 2;
+    let sx = 0;
+    let sy = 0;
+    const shakeSec = this.meFx(state)?.shake ?? 0;
+    if (shakeSec > 0) {
+      const t = performance.now() / 1e3;
+      const amp = Math.min(10 + shakeSec * 4, 26);
+      sx = Math.sin(t * 47.3) * amp;
+      sy = Math.cos(t * 53.7) * amp;
+    }
     ctx.save();
-    ctx.translate(cx, cy);
+    ctx.translate(cx + sx, cy + sy);
     ctx.rotate(camAngle);
     ctx.scale(scale, scale);
     this.drawRing();
     this.drawArena(state);
+    this.drawRopes(state);
+    this.drawPlayerFx(state);
     this.drawPaddles(state);
     this.drawBalls(state);
     ctx.restore();
+    this.drawScreenFx(state, sx, sy);
     if (state.snap.state === "playing" && state.balls.length === 0 && state.snap.respawnIn && state.snap.respawnIn > 0) {
       this.drawCountdown(state.snap.respawnIn);
+    }
+  }
+  drawScreenFx(state, sx, sy) {
+    const ctx = this.ctx;
+    const fx = this.meFx(state);
+    const blind = fx?.blind ?? 0;
+    if (blind > 0) {
+      const alpha = blind > 1.6 ? 0.94 : Math.max(0, blind * 0.55);
+      ctx.save();
+      ctx.fillStyle = `rgba(255,255,255,${alpha.toFixed(3)})`;
+      ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+      ctx.restore();
+    }
+    if ((fx?.shake ?? 0) > 0 && (sx !== 0 || sy !== 0)) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(180,80,40,0.25)";
+      ctx.lineWidth = Math.max(this.canvas.width, this.canvas.height) * 0.16;
+      ctx.shadowColor = "rgba(120,40,20,0.6)";
+      ctx.shadowBlur = 30;
+      ctx.strokeRect(-this.canvas.width * 0.2, -this.canvas.height * 0.2, this.canvas.width * 1.4, this.canvas.height * 1.4);
+      ctx.restore();
     }
   }
   drawCountdown(seconds) {
@@ -436,6 +724,9 @@ var GameRenderer = class {
         if (!player.isAlive) {
           ctx.shadowColor = "#ff2244";
           ctx.strokeStyle = "rgba(255,45,70,0.9)";
+        } else if ((player.fx?.shield ?? 0) > 0) {
+          ctx.shadowColor = "#e8eef2";
+          ctx.strokeStyle = "rgba(224,236,244,0.95)";
         } else {
           const col = playerColor(player.index);
           ctx.shadowColor = col;
@@ -453,10 +744,105 @@ var GameRenderer = class {
     }
     ctx.restore();
   }
+  /** Rope of the tether item: ball <-> anchor paddle centre, slack curves sag. */
+  drawRopes(state) {
+    const ctx = this.ctx;
+    const snapBalls = state.snap.balls;
+    state.balls.forEach((b, i) => {
+      const sb = snapBalls && snapBalls[i];
+      if (!sb || !sb.tether || !sb.tt || (sb.th ?? 0) < 1) return;
+      const anchor = state.players.find((p) => p.id === sb.tt);
+      if (!anchor || anchor.index < 0) return;
+      const seg = this.walls[2 * anchor.index];
+      if (!seg) return;
+      const faceLen = len(sub(seg.b, seg.a));
+      const ropeLen = 4 * faceLen * this.paddleHalf;
+      const ac = add(seg.a, mul(sub(seg.b, seg.a), anchor.angle));
+      const from = { x: b.x, y: b.y };
+      const dx = from.x - ac.x;
+      const dy = from.y - ac.y;
+      const d = Math.hypot(dx, dy);
+      const taut = d >= ropeLen;
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.shadowColor = "#8a5a2b";
+      ctx.shadowBlur = 6;
+      ctx.strokeStyle = "#b08050";
+      ctx.lineWidth = Math.max(2.5, faceLen * 0.018);
+      ctx.beginPath();
+      if (taut) {
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(ac.x, ac.y);
+      } else {
+        const sag = Math.min(1, 1 - d / ropeLen) * ropeLen * 0.5;
+        const mx = (from.x + ac.x) / 2;
+        const my = (from.y + ac.y) / 2;
+        const n = d > 0 ? { x: -dy / d, y: dx / d } : { x: 0, y: 1 };
+        const cpx = mx + n.x * sag;
+        const cpy = my + n.y * sag;
+        ctx.moveTo(from.x, from.y);
+        ctx.quadraticCurveTo(cpx, cpy, ac.x, ac.y);
+      }
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(240,210,170,0.7)";
+      ctx.lineWidth = 1.2;
+      ctx.restore();
+    });
+  }
+  /** Item icon + pop animation behind a paddle when an ability is active/armed. */
+  drawPlayerFx(state) {
+    const ctx = this.ctx;
+    const faceLen = 2 * this.radius * Math.sin(Math.PI / this.sides);
+    const byId = /* @__PURE__ */ new Map();
+    for (const sp of state.snap.players) byId.set(sp.id, sp);
+    const now = performance.now();
+    for (const p of state.players) {
+      if (!p.isAlive || p.index < 0) continue;
+      const sp = byId.get(p.id);
+      if (!sp) continue;
+      const key = paddleFxKey(sp);
+      if (!key) continue;
+      const seg = this.walls[2 * p.index];
+      if (!seg) continue;
+      const mid = mul(add(seg.a, seg.b), 0.5);
+      const n = norm(mid);
+      const iconR = faceLen * 0.11;
+      const off = faceLen * 0.22 + this.ballRadius * 2;
+      const bx = mid.x + n.x * off;
+      const by = mid.y + n.y * off;
+      const seenKey = p.id + ":" + key;
+      let first = this.fxSeen.get(seenKey);
+      if (first === void 0) {
+        first = now;
+        this.fxSeen.set(seenKey, now);
+      }
+      const age = now - first;
+      const pop = 1 + Math.max(0, 0.6 * Math.exp(-age * 6e-3));
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, 0.75 + age * 0.01);
+      drawItemIcon(ctx, key, bx, by, iconR * pop);
+      if (age < 600) {
+        ctx.globalAlpha = 1 - age / 600;
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(bx, by, iconR * (1.4 + age / 600 * 1.6), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    if (this.fxSeen.size > 200) {
+      for (const [k, t] of this.fxSeen) {
+        if (now - t > 3e3) this.fxSeen.delete(k);
+      }
+    }
+  }
   drawPaddles(state) {
     const ctx = this.ctx;
     const faceLen = 2 * this.radius * Math.sin(Math.PI / this.sides);
     const halfLen = faceLen * this.paddleHalf;
+    const byId = /* @__PURE__ */ new Map();
+    for (const sp of state.snap.players) byId.set(sp.id, sp);
     for (const p of state.players) {
       if (!p.isAlive) continue;
       const seg = this.walls[2 * p.index];
@@ -466,7 +852,10 @@ var GameRenderer = class {
       const center = add(seg.a, mul(sub(seg.b, seg.a), angle));
       const a = add(center, mul(dir, -halfLen));
       const b = add(center, mul(dir, halfLen));
-      const col = playerColor(p.index);
+      let col = playerColor(p.index);
+      const sp = byId.get(p.id);
+      const frozen = (sp?.fx?.frozen ?? 0) > 0;
+      if (frozen) col = "#aee6ff";
       ctx.save();
       ctx.lineCap = "round";
       ctx.shadowColor = col;
@@ -478,38 +867,103 @@ var GameRenderer = class {
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
       ctx.shadowBlur = 8;
-      ctx.strokeStyle = "#ffffff";
+      ctx.strokeStyle = frozen ? "#eafcff" : "#ffffff";
       ctx.lineWidth = 4;
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
+      if (frozen) {
+        ctx.shadowBlur = 12;
+        ctx.strokeStyle = "#7fd8ff";
+        ctx.lineWidth = 2.5;
+        const t = performance.now() / 1e3;
+        const wob = Math.sin(t * 8 + p.index * 2) * 2;
+        for (let s = -1; s <= 1; s++) {
+          const mx = center.x + dir.x * halfLen * s;
+          const my = center.y + dir.y * halfLen * s;
+          const tipx = mx + wob;
+          const tipy = my - (this.ballRadius * 1.6 + (s + 1) * 3);
+          ctx.beginPath();
+          ctx.moveTo(mx, my - 6);
+          ctx.lineTo(tipx, tipy);
+          ctx.moveTo(mx, my - 6);
+          ctx.lineTo(mx + s * 4, my - 14);
+          ctx.stroke();
+        }
+      }
       ctx.restore();
     }
   }
   drawBalls(state) {
     const ctx = this.ctx;
-    for (const b of state.balls) {
+    const snapBalls = state.snap.balls;
+    state.balls.forEach((b, i) => {
+      const fx = snapBalls && snapBalls[i];
+      const color = ballColor(fx);
+      const glowR = this.ballRadius * (fx?.fire ? 2.4 : 1.7);
       ctx.save();
-      ctx.shadowColor = "#00f0ff";
-      ctx.shadowBlur = 12;
-      const glowR = this.ballRadius * 1.7;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = fx?.fire ? 22 : 12;
       const halo = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, glowR);
       halo.addColorStop(0, "rgba(255,255,255,0.95)");
-      halo.addColorStop(0.45, "rgba(0,240,255,0.45)");
-      halo.addColorStop(1, "rgba(0,240,255,0)");
+      halo.addColorStop(0.45, hexA(color, 0.5));
+      halo.addColorStop(1, hexA(color, 0));
       ctx.fillStyle = halo;
       ctx.beginPath();
       ctx.arc(b.x, b.y, glowR, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = "#ffffff";
+      ctx.globalAlpha = fx?.fake ? 0.75 : 1;
+      ctx.fillStyle = fx?.fire ? "#fff1c4" : fx?.sticky ? "#eaffd8" : "#ffffff";
       ctx.beginPath();
       ctx.arc(b.x, b.y, this.ballRadius, 0, Math.PI * 2);
       ctx.fill();
+      if (fx?.fire) {
+        ctx.fillStyle = "#ff9f1a";
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, this.ballRadius * 0.45, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (fx?.sticky) {
+        ctx.strokeStyle = "#3fa72f";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, this.ballRadius * 1.15, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else if ((fx?.cv ?? 0) > 0) {
+        ctx.strokeStyle = "#4dd0ff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, this.ballRadius * 0.6, Math.PI * 0.2, Math.PI * 1.4);
+        ctx.stroke();
+      } else if (fx?.fake || fx?.tether) {
+        ctx.strokeStyle = "#c084fc";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([3, 4]);
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, this.ballRadius * 1.3, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      if ((fx?.stuck ?? 0) > 0) {
+        ctx.strokeStyle = "rgba(127,255,90,0.8)";
+        ctx.lineWidth = 3;
+        const t = performance.now() / 1e3;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, this.ballRadius * (1.25 + Math.sin(t * 6) * 0.08), 0, Math.PI * 2);
+        ctx.stroke();
+      }
       ctx.restore();
-    }
+    });
   }
 };
+function hexA(hex, a) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const bl = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${bl},${a})`;
+}
 
 // ../frontend/src/ui.ts
 function $(id) {
@@ -645,6 +1099,27 @@ function showToast(msg, ms = 3e3) {
   t.classList.remove("hidden");
   window.setTimeout(() => t.classList.add("hidden"), ms);
 }
+function updateItemSlot(snap) {
+  const slot = $("item-slot");
+  const cv = $("item-slot-canvas");
+  const hint = $("item-slot-hint");
+  slot.classList.toggle("hidden", !snap.items);
+  if (!snap.items) return;
+  const me = snap.players.find((p) => p.id === snap.you);
+  const key = me?.item || "";
+  const ctx = cv.getContext("2d");
+  if (ctx) {
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (key) {
+      drawItemIcon(ctx, key, cv.width / 2, cv.height / 2, cv.width * 0.34);
+    }
+  }
+  const def = itemDef(key);
+  hint.textContent = key ? def ? def.name : "\u041F\u0440\u0435\u0434\u043C\u0435\u0442" : "\u2014";
+  hint.classList.toggle("hidden", !key);
+  if (key) slot.classList.add("flash");
+  else slot.classList.remove("flash");
+}
 
 // ../frontend/src/main.ts
 var NAME_KEY = "neonpong.name";
@@ -705,6 +1180,7 @@ function bindCreatePanel() {
   const goLives = $("go-lives");
   const goAccel = $("go-accel");
   const goBall = $("go-ball");
+  const goItems = $("go-items");
   const goBallLabel = () => {
     $("go-ball-val").textContent = Number(goBall.value) === 0 ? "\u0432\u044B\u043A\u043B" : `${goBall.value} \u0441\u0435\u043A`;
   };
@@ -713,6 +1189,7 @@ function bindCreatePanel() {
     sendConfig();
   });
   goAccel.addEventListener("change", sendConfig);
+  goItems.addEventListener("change", sendConfig);
   goBall.addEventListener("input", () => {
     goBallLabel();
     sendConfig();
@@ -723,7 +1200,8 @@ function sendConfig() {
   const lives = Number($("go-lives").value);
   const accel = $("go-accel").checked;
   const ball = Number($("go-ball").value);
-  net?.send({ action: "config", lives, ballAccel: accel, addBallTime: ball });
+  const items = $("go-items").checked;
+  net?.send({ action: "config", lives, ballAccel: accel, addBallTime: ball, items });
 }
 function bindButtons() {
   $("btn-create").addEventListener("click", openCreate);
@@ -765,6 +1243,10 @@ function bindKeys() {
   window.addEventListener("keydown", (e) => {
     if (isTypingTarget(e.target)) return;
     switch (e.code) {
+      case "Space":
+        e.preventDefault();
+        useItem();
+        break;
       case "ArrowLeft":
       case "KeyA":
         e.preventDefault();
@@ -801,6 +1283,13 @@ function setKey(which, down) {
     const screenDir = renderer ? renderer.getFaceScreenDirX() : 1;
     inputSeq++;
     net?.send({ action: "move", dir: dir * screenDir, seq: inputSeq, lag: net.getLatency() });
+  }
+}
+function useItem() {
+  if (!playing) return;
+  const me = latestSnap?.players.find((p) => p.id === meID);
+  if (me && me.item) {
+    net?.send({ action: "use_item" });
   }
 }
 function captureName(form) {
@@ -847,6 +1336,7 @@ async function createRoom() {
   const lives = Number($("inp-lives").value);
   const accel = $("inp-accel").checked;
   const ball = Number($("inp-ball").value);
+  const items = $("inp-items").checked;
   if (!name) {
     showFormError("create", "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043A\u043E\u043C\u043D\u0430\u0442\u044B");
     return;
@@ -861,7 +1351,8 @@ async function createRoom() {
         maxPlayers: max,
         livesCount: lives,
         ballAccel: accel,
-        addBallTime: ball
+        addBallTime: ball,
+        items
       })
     });
     const data = await res.json();
@@ -956,6 +1447,7 @@ function handleSnapshot(snap) {
       renderLobby(snap, buildInviteLink(snap.roomID), kickPlayer);
     }
   } else if (snap.state === "playing") {
+    updateItemSlot(snap);
     if (me) {
       serverMyAngle = me.angle;
       serverLastSeq = me.lastSeq ?? 0;
@@ -1101,11 +1593,13 @@ function showGameOver(snap) {
     const lives = snap.lives ?? 3;
     const accel = snap.ballAccel ?? true;
     const ball = snap.addBallTime ?? 15;
+    const items = snap.items ?? false;
     $("go-lives").value = String(lives);
     $("go-lives-val").textContent = String(lives);
     $("go-accel").checked = accel;
     $("go-ball").value = String(ball);
     $("go-ball-val").textContent = ball === 0 ? "\u0432\u044B\u043A\u043B" : `${ball} \u0441\u0435\u043A`;
+    $("go-items").checked = items;
   }
   const sig = playersSignature(snap);
   if (sig !== lastGameOverSig) {

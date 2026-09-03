@@ -524,3 +524,45 @@ select:focus {
   overflow-y: auto;
 }
 
+
+/* Item slot (right side of the game field) */
+.item-slot {
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: rgba(5, 10, 20, 0.72);
+  border: 1px solid rgba(0, 240, 255, 0.35);
+  border-radius: 12px;
+  padding: 10px;
+  pointer-events: none;
+  box-shadow: 0 0 18px rgba(0, 240, 255, 0.15);
+}
+
+.item-slot canvas {
+  display: block;
+  width: 64px;
+  height: 64px;
+  filter: drop-shadow(0 0 6px rgba(0, 240, 255, 0.4));
+}
+
+.item-slot-hint {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.item-slot.flash {
+  animation: slotFlash 0.5s ease-out;
+}
+
+@keyframes slotFlash {
+  0% { transform: translateY(-50%) scale(1.25); border-color: #fff; }
+  100% { transform: translateY(-50%) scale(1); }
+}

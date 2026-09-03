@@ -10,11 +10,14 @@ export interface SimBall {
   y: number;
   vx: number;
   vy: number;
+  curve: number; // curve hits remaining (mirrors the server)
 }
 
 // Default interpolation delay for other players' paddles (the ball itself is
 // predicted at "now", so it stays in sync with my paddle).
 export const RENDER_DELAY_MS = 80;
+
+const CURVE_RATE = 3.5; // rad/s, must match the server
 
 const CORRECTION_MS = 100;     // error-correction blend window
 const CORRECTION_THRESHOLD = 20; // px of error before we correct the ball
@@ -68,7 +71,7 @@ export class LocalPhysics {
   onSnapshot(snap: Snapshot): void {
     while (this.balls.length < snap.balls.length) {
       const s = snap.balls[this.balls.length];
-      this.balls.push({ x: s.x, y: s.y, vx: s.vx, vy: s.vy });
+      this.balls.push({ x: s.x, y: s.y, vx: s.vx, vy: s.vy, curve: s.cv ?? 0 });
       this.corrections.push({ x: 0, y: 0 });
     }
     this.balls.length = snap.balls.length;
@@ -78,6 +81,7 @@ export class LocalPhysics {
     for (let i = 0; i < snap.balls.length; i++) {
       const s = snap.balls[i];
       const b = this.balls[i];
+      b.curve = s.cv ?? 0;
 
       // The server snapshot is ~latency old; extrapolate it to "now" and
       // compare against our predicted position.
@@ -102,6 +106,17 @@ export class LocalPhysics {
 
     for (let i = 0; i < this.balls.length; i++) {
       const b = this.balls[i];
+
+      // Curved balls bend their direction continuously (predictable, mirrors server).
+      if (b.curve > 0) {
+        const ang = CURVE_RATE * dt;
+        const c = Math.cos(ang);
+        const s = Math.sin(ang);
+        const nx = b.vx * c - b.vy * s;
+        b.vy = b.vx * s + b.vy * c;
+        b.vx = nx;
+      }
+
       b.x += b.vx * dt;
       b.y += b.vy * dt;
       this.collideBall(b);

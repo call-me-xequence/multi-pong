@@ -12,6 +12,7 @@ import {
   renderHUD,
   renderRoomList,
   renderGameOverPlayers,
+  updateItemSlot,
   showToast,
 } from './ui.js';
 import type { Snapshot, RoomInfo } from './types.js';
@@ -83,6 +84,7 @@ function bindCreatePanel(): void {
   const goLives = $('go-lives') as HTMLInputElement;
   const goAccel = $('go-accel') as HTMLInputElement;
   const goBall = $('go-ball') as HTMLInputElement;
+  const goItems = $('go-items') as HTMLInputElement;
   const goBallLabel = () => {
     $('go-ball-val').textContent = Number(goBall.value) === 0 ? 'выкл' : `${goBall.value} сек`;
   };
@@ -91,6 +93,7 @@ function bindCreatePanel(): void {
     sendConfig();
   });
   goAccel.addEventListener('change', sendConfig);
+  goItems.addEventListener('change', sendConfig);
   goBall.addEventListener('input', () => {
     goBallLabel();
     sendConfig();
@@ -102,7 +105,8 @@ function sendConfig(): void {
   const lives = Number(($('go-lives') as HTMLInputElement).value);
   const accel = ($('go-accel') as HTMLInputElement).checked;
   const ball = Number(($('go-ball') as HTMLInputElement).value);
-  net?.send({ action: 'config', lives, ballAccel: accel, addBallTime: ball });
+  const items = ($('go-items') as HTMLInputElement).checked;
+  net?.send({ action: 'config', lives, ballAccel: accel, addBallTime: ball, items });
 }
 
 function bindButtons(): void {
@@ -159,6 +163,10 @@ function bindKeys(): void {
     // Don't swallow keys while the user is typing in a field.
     if (isTypingTarget(e.target)) return;
     switch (e.code) {
+      case 'Space':
+        e.preventDefault();
+        useItem();
+        break;
       case 'ArrowLeft':
       case 'KeyA':
         e.preventDefault();
@@ -197,6 +205,15 @@ function setKey(which: 'left' | 'right', down: boolean): void {
     const screenDir = renderer ? renderer.getFaceScreenDirX() : 1;
     inputSeq++;
     net?.send({ action: 'move', dir: dir * screenDir, seq: inputSeq, lag: net.getLatency() });
+  }
+}
+
+/** Space: use the held power-up item. */
+function useItem(): void {
+  if (!playing) return;
+  const me = latestSnap?.players.find((p) => p.id === meID);
+  if (me && me.item) {
+    net?.send({ action: 'use_item' });
   }
 }
 
@@ -249,6 +266,7 @@ async function createRoom(): Promise<void> {
   const lives = Number(($('inp-lives') as HTMLInputElement).value);
   const accel = ($('inp-accel') as HTMLInputElement).checked;
   const ball = Number(($('inp-ball') as HTMLInputElement).value);
+  const items = ($('inp-items') as HTMLInputElement).checked;
 
   if (!name) {
     showFormError('create', 'Введите название комнаты');
@@ -266,6 +284,7 @@ async function createRoom(): Promise<void> {
         livesCount: lives,
         ballAccel: accel,
         addBallTime: ball,
+        items,
       }),
     });
     const data = await res.json();
@@ -372,6 +391,7 @@ function handleSnapshot(snap: Snapshot): void {
       renderLobby(snap, buildInviteLink(snap.roomID), kickPlayer);
     }
   } else if (snap.state === 'playing') {
+    updateItemSlot(snap);
     if (me) {
       serverMyAngle = me.angle;
       serverLastSeq = me.lastSeq ?? 0;
@@ -554,11 +574,13 @@ function showGameOver(snap: Snapshot): void {
     const lives = snap.lives ?? 3;
     const accel = snap.ballAccel ?? true;
     const ball = snap.addBallTime ?? 15;
+    const items = snap.items ?? false;
     ($('go-lives') as HTMLInputElement).value = String(lives);
     $('go-lives-val').textContent = String(lives);
     ($('go-accel') as HTMLInputElement).checked = accel;
     ($('go-ball') as HTMLInputElement).value = String(ball);
     $('go-ball-val').textContent = ball === 0 ? 'выкл' : `${ball} сек`;
+    ($('go-items') as HTMLInputElement).checked = items;
   }
 
   const sig = playersSignature(snap);

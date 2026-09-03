@@ -5,6 +5,14 @@ export interface SnapshotBall {
   y: number;
   vx: number;
   vy: number;
+  fire?: boolean;
+  cv?: number; // curve hits remaining (0 = not curving)
+  sticky?: boolean;
+  stuck?: number; // seconds remaining stuck
+  fake?: boolean;
+  tether?: boolean;
+  tt?: string; // tether target player id
+  th?: number; // tether bounce count
 }
 
 export interface SnapshotPlayer {
@@ -16,6 +24,11 @@ export interface SnapshotPlayer {
   isAlive: boolean;
   isHost: boolean;
   lastSeq?: number; // last input sequence processed by the server
+  item?: string; // held item key ('' = none)
+  fx?: Record<string, number>; // effect -> seconds remaining
+  arm?: string; // armed one-shot ability key
+  use?: string; // item used a moment ago (icon key)
+  useT?: number; // seconds the "just used" icon remains
 }
 
 export type GameState = 'waiting' | 'playing' | 'ended';
@@ -39,6 +52,7 @@ export interface Snapshot {
   lives?: number; // room lives setting (for the host UI)
   ballAccel?: boolean;
   addBallTime?: number;
+  items?: boolean; // whether power-up items are enabled
   players: SnapshotPlayer[];
   balls: SnapshotBall[];
 }
@@ -95,6 +109,11 @@ export interface ClientConfigMessage {
   lives: number;
   ballAccel: boolean;
   addBallTime: number;
+  items: boolean;
+}
+
+export interface ClientUseItemMessage {
+  action: 'use_item';
 }
 
 export type ClientMessage =
@@ -102,7 +121,8 @@ export type ClientMessage =
   | ClientStartMessage
   | ClientPingMessage
   | ClientKickMessage
-  | ClientConfigMessage;
+  | ClientConfigMessage
+  | ClientUseItemMessage;
 
 export interface RoomInfo {
   roomID: string;

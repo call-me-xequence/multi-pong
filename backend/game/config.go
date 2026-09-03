@@ -31,6 +31,9 @@ type GameConfig struct {
 	// Lives
 	Lives int
 
+	// Items
+	Items bool // whether power-up items drop during the match
+
 	// Networking
 	TickRate     int // server simulation rate (Hz)
 	SnapshotRate int // snapshot broadcast rate (Hz)

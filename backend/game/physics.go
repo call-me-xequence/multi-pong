@@ -31,15 +31,16 @@ func (r *Room) simulate(dt float64, timedEvents bool) {
 	r.drainInputsLocked()
 
 	cfg := r.Config
+	now := time.Now()
 
-	// 1. Move paddles from held inputs.
+	// 1. Move paddles from held inputs (frozen players are 50% slower).
 	faceLen := cfg.FaceLength()
 	if faceLen > 0 {
 		for _, p := range r.Players {
 			if !p.IsAlive || p.InputDir == 0 {
 				continue
 			}
-			p.Angle += float64(p.InputDir) * (cfg.PaddleSpeed / faceLen) * dt
+			p.Angle += float64(p.InputDir) * (cfg.PaddleSpeed * r.frozenSpeedFactor(p) / faceLen) * dt
 			half := cfg.PaddleHalf()
 			if p.Angle < half {
 				p.Angle = half
@@ -51,7 +52,9 @@ func (r *Room) simulate(dt float64, timedEvents bool) {
 	}
 
 	if timedEvents {
-		now := time.Now()
+		// Item drops and armed/debuff timers.
+		r.dropTickLocked(now)
+		r.tickItemTimersLocked(now)
 
 		// 2. Periodic ball acceleration (+AccelFactor every AccelInterval seconds).
 		if cfg.BallAccel && now.Sub(r.lastAccelAt).Seconds() >= cfg.AccelInterval {
@@ -79,11 +82,42 @@ func (r *Room) simulate(dt float64, timedEvents bool) {
 		}
 	}
 
-	// 4. Integrate balls and resolve collisions. Goals are collected and applied
+	// 4. Drop fake balls that left their owner's zone (pre-pass, avoids mutating
+	// the slice while we iterate).
+	r.removeFakeOutsideZoneLocked()
+
+	// 5. Integrate balls and resolve collisions. Goals are collected and applied
 	// after the loop so balls can be safely removed while iterating.
 	var goalBalls []*Ball
 	var goalPlayers []*Player
 	for _, b := range r.Balls {
+		// Sticky ball handling (stuck to a paddle/wall for a short moment).
+		if !b.StuckUntil.IsZero() {
+			if b.StuckUntil.After(now) {
+				// Still stuck: follow the paddle if it is stuck to one.
+				if b.StuckToP != "" {
+					if p := r.playerByID(b.StuckToP); p != nil && p.IsAlive && p.Index >= 0 {
+						seg := r.Faces[p.Index]
+						ab := geometry.Sub(seg.B, seg.A)
+						nn := geometry.Norm(geometry.Mul(geometry.Add(seg.A, seg.B), 0.5))
+						pos := geometry.Add(seg.A, geometry.Mul(ab, b.StuckT))
+						b.X = pos.X - nn.X*b.Radius
+						b.Y = pos.Y - nn.Y*b.Radius
+					}
+				}
+				continue
+			}
+			// Stick window over: release outward.
+			b.StuckUntil = time.Time{}
+			b.StuckToP = ""
+			b.VX = b.StuckNX * r.ballSpeed(b)
+			b.VY = b.StuckNY * r.ballSpeed(b)
+			continue
+		}
+
+		// Curve balls bend their path continuously (predictable on the client).
+		r.applyCurveLocked(b, dt)
+
 		px, py := b.X, b.Y
 		b.X += b.VX * dt
 		b.Y += b.VY * dt
@@ -109,6 +143,8 @@ func (r *Room) simulate(dt float64, timedEvents bool) {
 		}
 
 		if !scored {
+			// Tethered balls snap back to their anchor when the rope is taut.
+			r.tickTetherLocked(b)
 			r.containBallLocked(b)
 		}
 	}
@@ -168,22 +204,47 @@ func (r *Room) handleFace(b *Ball, seg geometry.Segment, p *Player, px, py float
 	half := cfg.PaddleHalf()
 	center := p.Angle
 
+	// The drawn paddle is the raw face segment, but the ball is a circle of
+	// radius b.Radius: when it grazes the paddle's end, the ball's disc still
+	// visibly touches the tip even though its centre projects a little beyond
+	// the segment. Extend the block zone by the ball radius at both tips so
+	// those edge hits bounce instead of counting as a goal (matches what the
+	// player actually sees). Steering stays normalised to the drawn paddle.
+	faceLen := math.Sqrt(lenSq)
+	if faceLen <= 0 {
+		return false
+	}
+	hitHalf := half + b.Radius/faceLen
+
 	// Only consider projections that actually land on the face segment.
 	if rawT < 0 || rawT > 1 {
 		return false
 	}
 	t := rawT
 
-	// Paddle zone: bounce the ball back.
-	if t >= center-half && t <= center+half {
+	// Paddle zone (tips included): bounce the ball back.
+	if t >= center-hitHalf && t <= center+hitHalf {
 		if outward > 0 && sdNow >= -b.Radius {
+			if b.Sticky {
+				// Sticky ball clings to the paddle for a moment.
+				r.stickToPaddleLocked(b, seg, n, p, t)
+				return false
+			}
 			r.bouncePaddle(b, seg, n, t, center, half)
+			r.triggerItemOnPaddleHitLocked(b, p)
 		}
 		return false
 	}
 
 	// Goal zone: the ball crossed the face line from inside to outside.
 	if outward > 0 && sdPrev < 0 && sdNow >= 0 {
+		if p.ShieldT.After(time.Now()) {
+			// The shield makes the goal impenetrable: reflect the ball off the
+			// whole face and break.
+			p.ShieldT = time.Time{}
+			r.bouncePaddle(b, seg, n, t, 0.5, 0.5)
+			return false
+		}
 		return true
 	}
 	return false
@@ -233,6 +294,18 @@ func (r *Room) collideWall(b *Ball, seg geometry.Segment) {
 	}
 
 	nx, ny := dx/d, dy/d
+	if b.Sticky {
+		// Sticky ball clings to the wall for a short moment.
+		now := time.Now()
+		b.StuckUntil = now.Add(time.Duration(stickyStickTime * float64(time.Second)))
+		b.StuckToP = ""
+		b.StuckT = 0
+		b.StuckNX, b.StuckNY = nx, ny
+		b.X = closest.X + nx*b.Radius
+		b.Y = closest.Y + ny*b.Radius
+		b.VX, b.VY = 0, 0
+		return
+	}
 	dot := b.VX*nx + b.VY*ny
 	if dot < 0 {
 		b.VX -= 2 * dot * nx
@@ -247,6 +320,7 @@ func (r *Room) collideWall(b *Ball, seg geometry.Segment) {
 // containBallLocked respawns a ball that somehow escaped the arena.
 func (r *Room) containBallLocked(b *Ball) {
 	if math.Hypot(b.X, b.Y) > r.Config.Radius*1.6 {
+		r.clearBallEffectsLocked(b)
 		r.respawnBallLocked(b, -1)
 	}
 }
@@ -312,15 +386,17 @@ func (r *Room) renormalizeBallsLocked() {
 	}
 }
 
-// normalizeBallLocked sets the ball's velocity magnitude to currentBallSpeed.
+// normalizeBallLocked sets the ball's velocity magnitude to the current ball
+// speed (times its fire multiplier when on fire).
 func (r *Room) normalizeBallLocked(b *Ball) {
 	spd := math.Hypot(b.VX, b.VY)
+	target := r.ballSpeed(b)
 	if spd == 0 {
 		angle := rand.Float64() * 2 * math.Pi
-		b.VX = r.currentBallSpeed * math.Cos(angle)
-		b.VY = r.currentBallSpeed * math.Sin(angle)
+		b.VX = target * math.Cos(angle)
+		b.VY = target * math.Sin(angle)
 		return
 	}
-	b.VX = b.VX / spd * r.currentBallSpeed
-	b.VY = b.VY / spd * r.currentBallSpeed
+	b.VX = b.VX / spd * target
+	b.VY = b.VY / spd * target
 }

@@ -14,4 +14,6 @@ var (
 	ErrInvalidName      = errors.New("room name is required")
 	ErrPlayerNotFound   = errors.New("player not found")
 	ErrCannotKickSelf   = errors.New("cannot kick yourself")
+	ErrNoItem           = errors.New("no item to use")
+	ErrCannotUseItem    = errors.New("cannot use items right now")
 )

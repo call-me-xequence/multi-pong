@@ -15,6 +15,7 @@ type createRoomRequest struct {
 	LivesCount  int    `json:"livesCount"`
 	BallAccel   bool   `json:"ballAccel"`
 	AddBallTime int    `json:"addBallTime"` // seconds, 0 = disabled
+	Items       bool   `json:"items"`       // enable power-up items
 }
 
 // CreateRoomHandler handles POST /create-room.
@@ -47,6 +48,7 @@ func (h *Hub) CreateRoomHandler(c *gin.Context) {
 	cfg := game.DefaultConfig()
 	cfg.Lives = req.LivesCount
 	cfg.BallAccel = req.BallAccel
+	cfg.Items = req.Items
 	if req.AddBallTime > 0 {
 		cfg.AddBallInterval = float64(req.AddBallTime)
 	} else {

@@ -127,6 +127,7 @@ func (h *Hub) WSHandler(c *gin.Context) {
 			Lives       int     `json:"lives"`
 			BallAccel   bool    `json:"ballAccel"`
 			AddBallTime int     `json:"addBallTime"`
+			Items       bool    `json:"items"`
 		}
 		if err := conn.ReadJSON(&msg); err != nil {
 			break
@@ -150,7 +151,13 @@ func (h *Hub) WSHandler(c *gin.Context) {
 				close(target.Kick)
 			}
 		case "config":
-			if err := room.UpdateConfig(playerID, msg.Lives, msg.BallAccel, msg.AddBallTime); err != nil {
+			if err := room.UpdateConfig(playerID, msg.Lives, msg.BallAccel, msg.AddBallTime, msg.Items); err != nil {
+				queueJSON(player, map[string]interface{}{
+					"type": "error", "message": err.Error(),
+				})
+			}
+		case "use_item":
+			if err := room.UseItem(playerID); err != nil {
 				queueJSON(player, map[string]interface{}{
 					"type": "error", "message": err.Error(),
 				})

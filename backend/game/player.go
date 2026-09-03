@@ -28,6 +28,30 @@ type Player struct {
 	// Queue holds inputs received out of order, applied when their sim time arrives.
 	Queue []queuedInput
 
+	// Held item (see items.go for ids). -1 = none; a player can hold only one.
+	Item int
+
+	// Armed one-shot buffs that trigger on the ball touching this player's paddle.
+	FireArmT   time.Time // paddle burns (fire) - window 3s
+	StickyArmT time.Time // sticky armed - window 6s
+	CurvedArm  bool      // curve armed (until contact)
+	FlashArm   bool      // blind/flash armed
+	FreezeArm  bool      // freeze armed
+	FakeArm    bool      // fake armed
+	TetherArm  bool      // tether armed
+	ShakeArm   bool      // shake armed
+
+	// "Used just now" marker: the item icon stays behind the goal for a short
+	// guaranteed window after pressing Space so everyone notices the activation.
+	IconKey   string
+	IconUntil time.Time
+
+	// Passive / debuff states on this player.
+	ShieldT time.Time // own goal impenetrable + aura
+	FrozenT time.Time // paddle slowed 50% (ice)
+	BlindT  time.Time // view blinded (flash)
+	ShakeT  time.Time // screen shake (earthquake)
+
 	// Send is the outbound queue consumed by the player's WebSocket writer goroutine.
 	Send chan []byte
 
