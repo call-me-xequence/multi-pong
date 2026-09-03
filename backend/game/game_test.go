@@ -40,6 +40,9 @@ func TestSimulationRunsAndKeepsBallInside(t *testing.T) {
 			t.Fatalf("add player %d: %v", i, err)
 		}
 	}
+	if err := r.Start("pa"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
 	if r.State != StatePlaying {
 		t.Fatalf("expected playing, got %s", r.State)
 	}
@@ -69,6 +72,9 @@ func TestTwoPlayerSimulation(t *testing.T) {
 	}
 	if _, err := r.AddPlayer("b", "B"); err != nil {
 		t.Fatal(err)
+	}
+	if err := r.Start("a"); err != nil {
+		t.Fatalf("start: %v", err)
 	}
 	if r.State != StatePlaying {
 		t.Fatalf("expected playing, got %s", r.State)
@@ -105,6 +111,9 @@ func TestPaddleBouncesBall(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := r.Start("pa"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
 
 	// Aim the ball exactly at the center of face 0 (where the paddle sits).
 	b := r.Balls[0]
@@ -131,6 +140,9 @@ func TestPaddleInputClamps(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := r.Start("pa"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
 
 	// Hold the paddle of player 0 "right" for a very long time.
 	p := r.Players[0]
@@ -156,6 +168,9 @@ func TestGoalRemovesBallAndRespawnsAfterDelay(t *testing.T) {
 	}
 	if _, err := r.AddPlayer("b", "B"); err != nil {
 		t.Fatal(err)
+	}
+	if err := r.Start("a"); err != nil {
+		t.Fatalf("start: %v", err)
 	}
 
 	// Park player A's paddle away from the face center so the ball scores.
@@ -267,6 +282,9 @@ func TestInputSequenceEcho(t *testing.T) {
 	if _, err := r.AddPlayer("b", "B"); err != nil {
 		t.Fatal(err)
 	}
+	if err := r.Start("a"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
 
 	r.SetInput("a", 1, 7)
 	r.SetInput("a", -1, 9)
@@ -319,6 +337,9 @@ func TestLagCompensationBlocksLateInput(t *testing.T) {
 			if _, err := r.AddPlayer("p"+string(rune('a'+i)), "P"); err != nil {
 				t.Fatal(err)
 			}
+		}
+		if err := r.Start("pa"); err != nil {
+			t.Fatalf("start: %v", err)
 		}
 		// Backdate simTime so the fast test loop stays aligned with wall-clock time
 		// (lag compensation timestamps inputs with time.Now()).
@@ -378,6 +399,9 @@ func TestSixPlayerReformAndLeftPaddle(t *testing.T) {
 		if _, err := r.AddPlayer("p"+string(rune('a'+i)), "P"); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := r.Start("pa"); err != nil {
+		t.Fatalf("start: %v", err)
 	}
 	if r.Config.Sides != 6 {
 		t.Fatalf("expected 6 sides at start, got %d", r.Config.Sides)
@@ -457,6 +481,9 @@ func TestFieldReformsOnElimination(t *testing.T) {
 		if _, err := r.AddPlayer(id, "P"); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := r.Start("pa"); err != nil {
+		t.Fatalf("start: %v", err)
 	}
 	if r.Config.Sides != 4 {
 		t.Fatalf("expected 4 sides at start, got %d", r.Config.Sides)

@@ -7,14 +7,24 @@ export function $(id: string): HTMLElement {
   return document.getElementById(id) as HTMLElement;
 }
 
-export function showScreen(name: 'menu' | 'lobby' | 'game'): void {
-  ['menu', 'lobby', 'game'].forEach((s) => {
+export type ScreenName = 'menu' | 'create' | 'join' | 'lobby' | 'game';
+
+const SCREENS: ScreenName[] = ['menu', 'create', 'join', 'lobby', 'game'];
+
+export function showScreen(name: ScreenName): void {
+  SCREENS.forEach((s) => {
     $('screen-' + s).classList.toggle('active', s === name);
   });
 }
 
 export function showMenuError(msg: string | null): void {
   const box = $('menu-error');
+  box.textContent = msg ?? '';
+  box.classList.toggle('hidden', !msg);
+}
+
+export function showFormError(form: 'create' | 'join', msg: string | null): void {
+  const box = $(form + '-error');
   box.textContent = msg ?? '';
   box.classList.toggle('hidden', !msg);
 }
@@ -26,12 +36,17 @@ function stateLabel(state: string): string {
 export function renderRoomList(
   rooms: RoomInfo[],
   filter: string,
-  onPick: (name: string) => void,
+  stateFilter: string,
+  onJoin: (roomID: string) => void,
 ): void {
   const list = $('room-list');
   list.innerHTML = '';
   const f = filter.trim().toLowerCase();
-  const shown = rooms.filter((r) => !f || r.roomID.toLowerCase().includes(f));
+  const shown = rooms.filter((r) => {
+    if (f && !r.roomID.toLowerCase().includes(f)) return false;
+    if (stateFilter !== 'all' && r.state !== stateFilter) return false;
+    return true;
+  });
 
   if (shown.length === 0) {
     const li = document.createElement('li');
@@ -46,6 +61,9 @@ export function renderRoomList(
     li.className = 'room-row';
     li.tabIndex = 0;
 
+    const info = document.createElement('div');
+    info.className = 'room-info';
+
     const name = document.createElement('span');
     name.className = 'pname';
     name.textContent = r.roomID + (r.hasPassword ? ' 🔒' : '');
@@ -54,8 +72,25 @@ export function renderRoomList(
     meta.className = 'hint';
     meta.textContent = `${r.players}/${r.maxPlayers} · ${stateLabel(r.state)}`;
 
-    li.append(name, meta);
-    li.addEventListener('click', () => onPick(r.roomID));
+    info.append(name, meta);
+
+    const join = document.createElement('button');
+    join.className = 'btn btn-sm btn-join';
+    join.type = 'button';
+    join.textContent = 'Подключиться';
+    join.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onJoin(r.roomID);
+    });
+
+    li.append(info, join);
+    li.addEventListener('click', () => onJoin(r.roomID));
+    li.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onJoin(r.roomID);
+      }
+    });
     list.appendChild(li);
   }
 }

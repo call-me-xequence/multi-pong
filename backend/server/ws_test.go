@@ -75,7 +75,7 @@ func TestCreateRoomAndWebSocketFlow(t *testing.T) {
 	srv := newTestServer(h)
 	defer srv.Close()
 
-	// 1. Create a 2-player room (auto-starts when full).
+	// 1. Create a 2-player room (the host starts it when full).
 	resp, err := http.Post(srv.URL+"/create-room", "application/json",
 		strings.NewReader(`{"name":"testroom","maxPlayers":2,"livesCount":1,"ballAccel":false,"addBallTime":0}`))
 	if err != nil {
@@ -92,7 +92,8 @@ func TestCreateRoomAndWebSocketFlow(t *testing.T) {
 		t.Fatal("no roomID returned")
 	}
 
-	// 2. Two players join. The second one fills the room and starts the game.
+	// 2. Two players join. The game must NOT auto-start on a full room: the host
+	// (the first to join) explicitly starts it.
 	c1 := dialWS(t, srv.URL, cr.RoomID, "P1")
 	defer c1.Close()
 	w1 := readUntil(t, c1, func(m *wireMsg) bool { return m.Type == "welcome" })
@@ -103,6 +104,10 @@ func TestCreateRoomAndWebSocketFlow(t *testing.T) {
 	c2 := dialWS(t, srv.URL, cr.RoomID, "P2")
 	defer c2.Close()
 	readUntil(t, c2, func(m *wireMsg) bool { return m.Type == "welcome" })
+
+	if err := c1.WriteJSON(map[string]interface{}{"action": "start"}); err != nil {
+		t.Fatal(err)
+	}
 
 	// 3. Both players should see a playing snapshot with 2 players and a ball.
 	snap := readUntil(t, c1, func(m *wireMsg) bool {

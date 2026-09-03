@@ -13,7 +13,7 @@ export interface NetHandlers {
 export class Net {
   private ws: WebSocket | null = null;
   private pingTimer: number | null = null;
-  private latencyMs = 60;
+  private latencyMs = 20;
   private closedByUser = false;
 
   constructor(
@@ -53,7 +53,11 @@ export class Net {
           break;
         case 'pong': {
           const rtt = performance.now() - m.c;
-          this.latencyMs = Math.max(30, Math.min(220, rtt / 2));
+          // Report the real one-way latency (RTT/2). Only a tiny floor is used so
+          // that a LAN / localhost connection reports ~1 ms instead of a made-up
+          // 30 ms. A fabricated floor makes the server treat every input as late
+          // and rewind on every key change, which shows up as paddle jitter.
+          this.latencyMs = Math.max(1, Math.min(250, rtt / 2));
           break;
         }
         case 'kicked':

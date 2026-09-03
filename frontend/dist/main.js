@@ -1,4 +1,4 @@
-// frontend/src/net.ts
+// ../frontend/src/net.ts
 var Net = class {
   constructor(roomID, playerName, password, handlers) {
     this.roomID = roomID;
@@ -7,7 +7,7 @@ var Net = class {
     this.handlers = handlers;
     this.ws = null;
     this.pingTimer = null;
-    this.latencyMs = 60;
+    this.latencyMs = 20;
     this.closedByUser = false;
   }
   connect() {
@@ -34,7 +34,7 @@ var Net = class {
           break;
         case "pong": {
           const rtt = performance.now() - m.c;
-          this.latencyMs = Math.max(30, Math.min(220, rtt / 2));
+          this.latencyMs = Math.max(1, Math.min(250, rtt / 2));
           break;
         }
         case "kicked":
@@ -77,7 +77,7 @@ var Net = class {
   }
 };
 
-// frontend/src/geometry.ts
+// ../frontend/src/geometry.ts
 var PI = Math.PI;
 function sub(a, b) {
   return { x: a.x - b.x, y: a.y - b.y };
@@ -158,7 +158,7 @@ function buildWalls(sides, radius, chamfer) {
   return walls;
 }
 
-// frontend/src/physics.ts
+// ../frontend/src/physics.ts
 var RENDER_DELAY_MS = 80;
 var CORRECTION_MS = 100;
 var CORRECTION_THRESHOLD = 20;
@@ -322,7 +322,7 @@ var SnapshotBuffer = class {
   }
 };
 
-// frontend/src/renderer.ts
+// ../frontend/src/renderer.ts
 var PALETTE = ["#00f0ff", "#ff3df0", "#ffe600", "#39ff6a", "#ff7a00", "#9d6bff"];
 function playerColor(index) {
   return PALETTE[(index % PALETTE.length + PALETTE.length) % PALETTE.length];
@@ -511,12 +511,13 @@ var GameRenderer = class {
   }
 };
 
-// frontend/src/ui.ts
+// ../frontend/src/ui.ts
 function $(id) {
   return document.getElementById(id);
 }
+var SCREENS = ["menu", "create", "join", "lobby", "game"];
 function showScreen(name) {
-  ["menu", "lobby", "game"].forEach((s) => {
+  SCREENS.forEach((s) => {
     $("screen-" + s).classList.toggle("active", s === name);
   });
 }
@@ -525,14 +526,23 @@ function showMenuError(msg) {
   box.textContent = msg ?? "";
   box.classList.toggle("hidden", !msg);
 }
+function showFormError(form, msg) {
+  const box = $(form + "-error");
+  box.textContent = msg ?? "";
+  box.classList.toggle("hidden", !msg);
+}
 function stateLabel(state) {
   return state === "waiting" ? "\u043E\u0436\u0438\u0434\u0430\u043D\u0438\u0435" : state === "playing" ? "\u0438\u0433\u0440\u0430" : "\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0430";
 }
-function renderRoomList(rooms2, filter, onPick) {
+function renderRoomList(rooms2, filter, stateFilter, onJoin) {
   const list = $("room-list");
   list.innerHTML = "";
   const f = filter.trim().toLowerCase();
-  const shown = rooms2.filter((r) => !f || r.roomID.toLowerCase().includes(f));
+  const shown = rooms2.filter((r) => {
+    if (f && !r.roomID.toLowerCase().includes(f)) return false;
+    if (stateFilter !== "all" && r.state !== stateFilter) return false;
+    return true;
+  });
   if (shown.length === 0) {
     const li = document.createElement("li");
     li.className = "hint";
@@ -544,14 +554,31 @@ function renderRoomList(rooms2, filter, onPick) {
     const li = document.createElement("li");
     li.className = "room-row";
     li.tabIndex = 0;
+    const info = document.createElement("div");
+    info.className = "room-info";
     const name = document.createElement("span");
     name.className = "pname";
     name.textContent = r.roomID + (r.hasPassword ? " \u{1F512}" : "");
     const meta = document.createElement("span");
     meta.className = "hint";
     meta.textContent = `${r.players}/${r.maxPlayers} \xB7 ${stateLabel(r.state)}`;
-    li.append(name, meta);
-    li.addEventListener("click", () => onPick(r.roomID));
+    info.append(name, meta);
+    const join = document.createElement("button");
+    join.className = "btn btn-sm btn-join";
+    join.type = "button";
+    join.textContent = "\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u044C\u0441\u044F";
+    join.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onJoin(r.roomID);
+    });
+    li.append(info, join);
+    li.addEventListener("click", () => onJoin(r.roomID));
+    li.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onJoin(r.roomID);
+      }
+    });
     list.appendChild(li);
   }
 }
@@ -619,7 +646,7 @@ function showToast(msg, ms = 3e3) {
   window.setTimeout(() => t.classList.add("hidden"), ms);
 }
 
-// frontend/src/main.ts
+// ../frontend/src/main.ts
 var NAME_KEY = "neonpong.name";
 var net = null;
 var renderer = null;
@@ -648,18 +675,21 @@ var rooms = [];
 var lastLobbySig = "";
 var lastGameOverSig = "";
 var gameOverInitDone = false;
+var joinRoomID = "";
+var connContext = "menu";
+var myName = localStorage.getItem(NAME_KEY) || "";
 function init() {
-  const nameInput = $("player-name");
-  const saved = localStorage.getItem(NAME_KEY);
-  if (saved) nameInput.value = saved;
-  const roomParam = new URLSearchParams(location.search).get("room");
-  if (roomParam) $("join-room-name").value = roomParam;
   bindCreatePanel();
   bindButtons();
   bindKeys();
   refreshRooms();
+  const roomParam = new URLSearchParams(location.search).get("room");
+  if (roomParam) {
+    openJoin(roomParam);
+  } else {
+    showScreen("menu");
+  }
   window.setInterval(refreshRooms, 5e3);
-  showScreen("menu");
 }
 function bindCreatePanel() {
   const max = $("inp-max");
@@ -696,13 +726,17 @@ function sendConfig() {
   net?.send({ action: "config", lives, ballAccel: accel, addBallTime: ball });
 }
 function bindButtons() {
-  $("btn-create").addEventListener("click", () => {
-    $("create-panel").classList.toggle("hidden");
-  });
-  $("btn-create-go").addEventListener("click", createRoom);
-  $("btn-join").addEventListener("click", joinRoom);
+  $("btn-create").addEventListener("click", openCreate);
   $("btn-refresh-rooms").addEventListener("click", refreshRooms);
   $("room-filter").addEventListener("input", renderRooms);
+  $("room-state-filter").addEventListener("change", renderRooms);
+  $("btn-create-go").addEventListener("click", createRoom);
+  $("btn-create-back").addEventListener("click", backToMenu);
+  $("btn-join").addEventListener("click", joinRoom);
+  $("btn-join-back").addEventListener("click", backToMenu);
+  $("join-pass").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") joinRoom();
+  });
   $("btn-copy").addEventListener("click", async () => {
     const link = $("lobby-link");
     try {
@@ -715,6 +749,7 @@ function bindButtons() {
   $("btn-start").addEventListener("click", () => {
     net?.send({ action: "start" });
   });
+  $("btn-lobby-back").addEventListener("click", leaveToMenu);
   $("btn-restart").addEventListener("click", () => {
     $("game-over").classList.add("hidden");
     net?.send({ action: "start" });
@@ -768,12 +803,44 @@ function setKey(which, down) {
     net?.send({ action: "move", dir: dir * screenDir, seq: inputSeq, lag: net.getLatency() });
   }
 }
-function getPlayerName() {
-  const name = $("player-name").value.trim();
-  return name || "Player";
+function captureName(form) {
+  const input = $(form === "create" ? "create-name" : "join-name");
+  const name = input.value.trim() || "Player";
+  myName = name;
+  localStorage.setItem(NAME_KEY, name);
+  return name;
+}
+function openCreate() {
+  $("create-name").value = myName;
+  showFormError("create", null);
+  showScreen("create");
+}
+function openJoin(roomID) {
+  joinRoomID = roomID;
+  $("join-room-label").textContent = roomID;
+  $("join-name").value = myName;
+  $("join-pass").value = "";
+  showFormError("join", null);
+  showScreen("join");
+  $("join-name").focus();
+}
+function backToMenu() {
+  joinRoomID = "";
+  showFormError("create", null);
+  showFormError("join", null);
+  showMenuError(null);
+  showScreen("menu");
+  refreshRooms();
+}
+function showGlobalError(msg) {
+  showFormError("create", null);
+  showFormError("join", null);
+  showMenuError(msg);
+  showScreen("menu");
+  refreshRooms();
 }
 async function createRoom() {
-  showMenuError(null);
+  const playerName = captureName("create");
   const name = $("inp-room-name").value.trim();
   const pass = $("inp-room-pass").value;
   const max = Number($("inp-max").value);
@@ -781,7 +848,7 @@ async function createRoom() {
   const accel = $("inp-accel").checked;
   const ball = Number($("inp-ball").value);
   if (!name) {
-    showMenuError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043A\u043E\u043C\u043D\u0430\u0442\u044B");
+    showFormError("create", "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043A\u043E\u043C\u043D\u0430\u0442\u044B");
     return;
   }
   try {
@@ -799,27 +866,28 @@ async function createRoom() {
     });
     const data = await res.json();
     if (!res.ok) {
-      showMenuError(data.error || "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043E\u0437\u0434\u0430\u0442\u044C \u043A\u043E\u043C\u043D\u0430\u0442\u0443");
+      showFormError("create", data.error || "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043E\u0437\u0434\u0430\u0442\u044C \u043A\u043E\u043C\u043D\u0430\u0442\u0443");
       return;
     }
-    connect(data.roomID, pass);
+    connContext = "create";
+    connect(data.roomID, pass, playerName);
   } catch {
-    showMenuError("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043E\u0437\u0434\u0430\u0442\u044C \u043A\u043E\u043C\u043D\u0430\u0442\u0443. \u0421\u0435\u0440\u0432\u0435\u0440 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D?");
+    showFormError("create", "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043E\u0437\u0434\u0430\u0442\u044C \u043A\u043E\u043C\u043D\u0430\u0442\u0443. \u0421\u0435\u0440\u0432\u0435\u0440 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D?");
   }
 }
 function joinRoom() {
-  const name = $("join-room-name").value.trim();
-  const pass = $("join-room-pass").value;
-  if (!name) {
-    showMenuError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043A\u043E\u043C\u043D\u0430\u0442\u044B");
+  const playerName = captureName("join");
+  const pass = $("join-pass").value;
+  if (!joinRoomID) {
+    showFormError("join", "\u041D\u0435 \u0432\u044B\u0431\u0440\u0430\u043D\u0430 \u043A\u043E\u043C\u043D\u0430\u0442\u0430");
     return;
   }
-  connect(name, pass);
+  connContext = "join";
+  connect(joinRoomID, pass, playerName);
 }
-function connect(roomID, password = "") {
-  const name = getPlayerName();
+function connect(roomID, password, name) {
+  myName = name;
   localStorage.setItem(NAME_KEY, name);
-  showMenuError(null);
   net?.close();
   net = new Net(roomID, name, password, {
     onWelcome: (w) => {
@@ -828,20 +896,23 @@ function connect(roomID, password = "") {
     onSnapshot: handleSnapshot,
     onError: (m) => {
       net?.close();
-      showScreen("menu");
-      showMenuError(m);
+      if (connContext === "create") {
+        showFormError("create", m);
+        showScreen("create");
+      } else {
+        showFormError("join", m);
+        showScreen("join");
+      }
       refreshRooms();
     },
     onKicked: () => {
       net?.close();
-      showScreen("menu");
-      showMenuError("\u0412\u044B \u0431\u044B\u043B\u0438 \u0438\u0441\u043A\u043B\u044E\u0447\u0435\u043D\u044B \u0438\u0437 \u043A\u043E\u043C\u043D\u0430\u0442\u044B");
-      refreshRooms();
+      if (playing) stopLoop();
+      showGlobalError("\u0412\u044B \u0431\u044B\u043B\u0438 \u0438\u0441\u043A\u043B\u044E\u0447\u0435\u043D\u044B \u0438\u0437 \u043A\u043E\u043C\u043D\u0430\u0442\u044B");
     },
     onClose: () => {
       if (playing) stopLoop();
-      showScreen("menu");
-      showMenuError("\u0421\u043E\u0435\u0434\u0438\u043D\u0435\u043D\u0438\u0435 \u0441 \u0441\u0435\u0440\u0432\u0435\u0440\u043E\u043C \u043F\u043E\u0442\u0435\u0440\u044F\u043D\u043E");
+      showGlobalError("\u0421\u043E\u0435\u0434\u0438\u043D\u0435\u043D\u0438\u0435 \u0441 \u0441\u0435\u0440\u0432\u0435\u0440\u043E\u043C \u043F\u043E\u0442\u0435\u0440\u044F\u043D\u043E");
     }
   });
   net.connect();
@@ -855,6 +926,7 @@ function playersSignature(snap) {
   return snap.players.map((p) => `${p.id}:${p.isHost}:${p.isAlive}`).join("|");
 }
 async function refreshRooms() {
+  if (!$("screen-menu").classList.contains("active")) return;
   try {
     const res = await fetch("/rooms");
     if (!res.ok) return;
@@ -866,10 +938,8 @@ async function refreshRooms() {
 }
 function renderRooms() {
   const filter = $("room-filter").value;
-  renderRoomList(rooms, filter, (name) => {
-    $("join-room-name").value = name;
-    $("join-room-pass").focus();
-  });
+  const stateFilter = $("room-state-filter").value;
+  renderRoomList(rooms, filter, stateFilter, openJoin);
 }
 function handleSnapshot(snap) {
   latestSnap = snap;
@@ -993,7 +1063,12 @@ function stepMyPaddle(dt) {
     myAngle += dir * screenDir * (speed / faceLen) * dt;
     myAngle = Math.max(half, Math.min(1 - half, myAngle));
   } else if (inputSeq <= serverLastSeq) {
-    myAngle += (serverMyAngle - myAngle) * Math.min(1, dt / 0.2);
+    const tickTravel = speed / faceLen / 60;
+    const deadZone = tickTravel * 2;
+    const err = serverMyAngle - myAngle;
+    if (Math.abs(err) > deadZone) {
+      myAngle += err * Math.min(1, dt / 0.15);
+    }
   }
 }
 function showGameOver(snap) {
@@ -1060,8 +1135,7 @@ function leaveToMenu() {
   lastLobbySig = "";
   lastGameOverSig = "";
   gameOverInitDone = false;
-  refreshRooms();
-  showScreen("menu");
+  backToMenu();
 }
 function buildInviteLink(roomID) {
   return `${location.origin}${location.pathname}?room=${roomID}`;

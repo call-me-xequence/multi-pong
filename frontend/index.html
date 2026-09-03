@@ -8,55 +8,28 @@
 </head>
 <body>
   <div id="app">
-    <!-- ===================== MENU ===================== -->
+    <!-- ===================== MAIN MENU ===================== -->
     <section id="screen-menu" class="screen active">
       <div class="menu-inner">
         <h1 class="logo">NEON <span>PONG</span> BATTLE</h1>
         <p class="tagline">Мультиплеерная аркада на выбывание · до 6 игроков</p>
 
-        <div class="card">
-          <label class="label" for="player-name">Имя игрока</label>
-          <input id="player-name" type="text" maxlength="16" placeholder="Player" />
-
-          <div class="row">
-            <input id="join-room-name" type="text" maxlength="32" placeholder="Название комнаты" />
-            <input id="join-room-pass" type="password" maxlength="32" placeholder="Пароль" />
-            <button id="btn-join" class="btn">Войти</button>
-          </div>
-
-          <div class="divider"><span>или</span></div>
-
-          <button id="btn-create" class="btn btn-accent">Создать комнату</button>
-
-          <div id="create-panel" class="create-panel hidden">
-            <input id="inp-room-name" type="text" maxlength="32" placeholder="Название комнаты" />
-            <input id="inp-room-pass" type="password" maxlength="32" placeholder="Пароль (необязательно)" />
-            <div class="field">
-              <label>Игроков: <b id="val-max">4</b></label>
-              <input id="inp-max" type="range" min="2" max="6" step="1" value="4" />
-            </div>
-            <div class="field">
-              <label>Кол-во жизней: <b id="val-lives">3</b></label>
-              <input id="inp-lives" type="range" min="1" max="5" step="1" value="3" />
-            </div>
-            <div class="field field-inline">
-              <label for="inp-accel">Ускорение мяча</label>
-              <input id="inp-accel" type="checkbox" checked />
-            </div>
-            <div class="field">
-              <label>Доп. мячи: <b id="val-ball">15 сек</b></label>
-              <input id="inp-ball" type="range" min="0" max="30" step="5" value="15" />
-            </div>
-            <button id="btn-create-go" class="btn btn-accent">Создать</button>
-          </div>
-        </div>
+        <button id="btn-create" class="btn btn-accent btn-hero" type="button">＋ Создать комнату</button>
 
         <div class="card room-list-card">
           <div class="room-list-head">
-            <h3>Список комнат</h3>
-            <button id="btn-refresh-rooms" class="btn btn-sm">Обновить</button>
+            <h3>Комнаты</h3>
+            <button id="btn-refresh-rooms" class="btn btn-sm" type="button">Обновить</button>
           </div>
-          <input id="room-filter" type="text" maxlength="32" placeholder="Поиск комнаты..." />
+          <div class="room-filter-row">
+            <input id="room-filter" type="text" maxlength="32" placeholder="Поиск комнаты..." />
+            <select id="room-state-filter" aria-label="Фильтр по статусу">
+              <option value="all">Все</option>
+              <option value="waiting">Ожидание</option>
+              <option value="playing">В игре</option>
+              <option value="ended">Завершена</option>
+            </select>
+          </div>
           <ul id="room-list" class="player-list"></ul>
         </div>
 
@@ -64,10 +37,70 @@
       </div>
     </section>
 
+    <!-- ===================== CREATE ROOM ===================== -->
+    <section id="screen-create" class="screen">
+      <div class="menu-inner">
+        <button id="btn-create-back" class="btn btn-sm btn-back" type="button">← Назад</button>
+        <h2 class="screen-title">Создание комнаты</h2>
+
+        <div class="card">
+          <label class="label" for="create-name">Ваше имя</label>
+          <input id="create-name" type="text" maxlength="16" placeholder="Player" />
+
+          <label class="label" for="inp-room-name">Название комнаты</label>
+          <input id="inp-room-name" type="text" maxlength="32" placeholder="Например: Ночной раунд" />
+
+          <label class="label" for="inp-room-pass">Пароль (необязательно)</label>
+          <input id="inp-room-pass" type="password" maxlength="32" placeholder="Пароль" />
+
+          <div class="field">
+            <label>Игроков: <b id="val-max">4</b></label>
+            <input id="inp-max" type="range" min="2" max="6" step="1" value="4" />
+          </div>
+          <div class="field">
+            <label>Кол-во жизней: <b id="val-lives">3</b></label>
+            <input id="inp-lives" type="range" min="1" max="5" step="1" value="3" />
+          </div>
+          <div class="field field-inline">
+            <label for="inp-accel">Ускорение мяча</label>
+            <input id="inp-accel" type="checkbox" checked />
+          </div>
+          <div class="field">
+            <label>Доп. мячи: <b id="val-ball">15 сек</b></label>
+            <input id="inp-ball" type="range" min="0" max="30" step="5" value="15" />
+          </div>
+
+          <button id="btn-create-go" class="btn btn-accent btn-block" type="button">Создать комнату</button>
+          <div id="create-error" class="error hidden"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== JOIN ROOM ===================== -->
+    <section id="screen-join" class="screen">
+      <div class="menu-inner">
+        <button id="btn-join-back" class="btn btn-sm btn-back" type="button">← Назад</button>
+        <h2 class="screen-title">Подключиться</h2>
+        <p class="tagline">Комната: <span id="join-room-label" class="accent"></span></p>
+
+        <div class="card">
+          <label class="label" for="join-name">Ваше имя</label>
+          <input id="join-name" type="text" maxlength="16" placeholder="Player" />
+
+          <label class="label" for="join-pass">Пароль</label>
+          <input id="join-pass" type="password" maxlength="32" placeholder="Пароль (если установлен)" />
+
+          <button id="btn-join" class="btn btn-accent btn-block" type="button">Подключиться</button>
+          <div id="join-error" class="error hidden"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- ===================== LOBBY ===================== -->
     <section id="screen-lobby" class="screen">
       <div class="menu-inner">
         <div class="card lobby-card">
+          <button id="btn-lobby-back" class="btn btn-sm btn-back" type="button">← В меню</button>
           <h2>Комната <span id="lobby-room-id" class="accent"></span></h2>
           <p class="hint">Пригласите друзей — отправьте ссылку или ID комнаты</p>
           <div class="row">

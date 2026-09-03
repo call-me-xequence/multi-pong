@@ -7,6 +7,7 @@ import {
   $,
   showScreen,
   showMenuError,
+  showFormError,
   renderLobby,
   renderHUD,
   renderRoomList,
@@ -47,21 +48,24 @@ let rooms: RoomInfo[] = [];
 let lastLobbySig = '';
 let lastGameOverSig = '';
 let gameOverInitDone = false;
+let joinRoomID = ''; // room selected on the join screen
+let connContext: 'create' | 'join' | 'menu' = 'menu';
+let myName = localStorage.getItem(NAME_KEY) || '';
 
 function init(): void {
-  const nameInput = $('player-name') as HTMLInputElement;
-  const saved = localStorage.getItem(NAME_KEY);
-  if (saved) nameInput.value = saved;
-
-  const roomParam = new URLSearchParams(location.search).get('room');
-  if (roomParam) ($('join-room-name') as HTMLInputElement).value = roomParam;
-
   bindCreatePanel();
   bindButtons();
   bindKeys();
   refreshRooms();
+
+  const roomParam = new URLSearchParams(location.search).get('room');
+  if (roomParam) {
+    openJoin(roomParam);
+  } else {
+    showScreen('menu');
+  }
+
   window.setInterval(refreshRooms, 5000);
-  showScreen('menu');
 }
 
 function bindCreatePanel(): void {
@@ -102,14 +106,22 @@ function sendConfig(): void {
 }
 
 function bindButtons(): void {
-  $('btn-create').addEventListener('click', () => {
-    $('create-panel').classList.toggle('hidden');
-  });
-  $('btn-create-go').addEventListener('click', createRoom);
-  $('btn-join').addEventListener('click', joinRoom);
-
+  // Main menu
+  $('btn-create').addEventListener('click', openCreate);
   $('btn-refresh-rooms').addEventListener('click', refreshRooms);
   $('room-filter').addEventListener('input', renderRooms);
+  $('room-state-filter').addEventListener('change', renderRooms);
+
+  // Create room screen
+  $('btn-create-go').addEventListener('click', createRoom);
+  $('btn-create-back').addEventListener('click', backToMenu);
+
+  // Join room screen
+  $('btn-join').addEventListener('click', joinRoom);
+  $('btn-join-back').addEventListener('click', backToMenu);
+  $('join-pass').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') joinRoom();
+  });
 
   $('btn-copy').addEventListener('click', async () => {
     const link = $('lobby-link') as HTMLInputElement;
@@ -124,6 +136,9 @@ function bindButtons(): void {
   $('btn-start').addEventListener('click', () => {
     net?.send({ action: 'start' });
   });
+
+  // Lobby / room screen
+  $('btn-lobby-back').addEventListener('click', leaveToMenu);
 
   $('btn-restart').addEventListener('click', () => {
     $('game-over').classList.add('hidden');
@@ -185,13 +200,49 @@ function setKey(which: 'left' | 'right', down: boolean): void {
   }
 }
 
-function getPlayerName(): string {
-  const name = ($('player-name') as HTMLInputElement).value.trim();
-  return name || 'Player';
+function captureName(form: 'create' | 'join'): string {
+  const input = $(form === 'create' ? 'create-name' : 'join-name') as HTMLInputElement;
+  const name = input.value.trim() || 'Player';
+  myName = name;
+  localStorage.setItem(NAME_KEY, name);
+  return name;
+}
+
+function openCreate(): void {
+  ($('create-name') as HTMLInputElement).value = myName;
+  showFormError('create', null);
+  showScreen('create');
+}
+
+function openJoin(roomID: string): void {
+  joinRoomID = roomID;
+  $('join-room-label').textContent = roomID;
+  ($('join-name') as HTMLInputElement).value = myName;
+  ($('join-pass') as HTMLInputElement).value = '';
+  showFormError('join', null);
+  showScreen('join');
+  ($('join-name') as HTMLInputElement).focus();
+}
+
+function backToMenu(): void {
+  joinRoomID = '';
+  showFormError('create', null);
+  showFormError('join', null);
+  showMenuError(null);
+  showScreen('menu');
+  refreshRooms();
+}
+
+function showGlobalError(msg: string): void {
+  showFormError('create', null);
+  showFormError('join', null);
+  showMenuError(msg);
+  showScreen('menu');
+  refreshRooms();
 }
 
 async function createRoom(): Promise<void> {
-  showMenuError(null);
+  const playerName = captureName('create');
   const name = ($('inp-room-name') as HTMLInputElement).value.trim();
   const pass = ($('inp-room-pass') as HTMLInputElement).value;
   const max = Number(($('inp-max') as HTMLInputElement).value);
@@ -200,7 +251,7 @@ async function createRoom(): Promise<void> {
   const ball = Number(($('inp-ball') as HTMLInputElement).value);
 
   if (!name) {
-    showMenuError('Введите название комнаты');
+    showFormError('create', 'Введите название комнаты');
     return;
   }
 
@@ -219,29 +270,30 @@ async function createRoom(): Promise<void> {
     });
     const data = await res.json();
     if (!res.ok) {
-      showMenuError(data.error || 'Не удалось создать комнату');
+      showFormError('create', data.error || 'Не удалось создать комнату');
       return;
     }
-    connect(data.roomID, pass);
+    connContext = 'create';
+    connect(data.roomID, pass, playerName);
   } catch {
-    showMenuError('Не удалось создать комнату. Сервер недоступен?');
+    showFormError('create', 'Не удалось создать комнату. Сервер недоступен?');
   }
 }
 
 function joinRoom(): void {
-  const name = ($('join-room-name') as HTMLInputElement).value.trim();
-  const pass = ($('join-room-pass') as HTMLInputElement).value;
-  if (!name) {
-    showMenuError('Введите название комнаты');
+  const playerName = captureName('join');
+  const pass = ($('join-pass') as HTMLInputElement).value;
+  if (!joinRoomID) {
+    showFormError('join', 'Не выбрана комната');
     return;
   }
-  connect(name, pass);
+  connContext = 'join';
+  connect(joinRoomID, pass, playerName);
 }
 
-function connect(roomID: string, password = ''): void {
-  const name = getPlayerName();
+function connect(roomID: string, password: string, name: string): void {
+  myName = name;
   localStorage.setItem(NAME_KEY, name);
-  showMenuError(null);
 
   net?.close();
   net = new Net(roomID, name, password, {
@@ -251,20 +303,23 @@ function connect(roomID: string, password = ''): void {
     onSnapshot: handleSnapshot,
     onError: (m) => {
       net?.close();
-      showScreen('menu');
-      showMenuError(m);
+      if (connContext === 'create') {
+        showFormError('create', m);
+        showScreen('create');
+      } else {
+        showFormError('join', m);
+        showScreen('join');
+      }
       refreshRooms();
     },
     onKicked: () => {
       net?.close();
-      showScreen('menu');
-      showMenuError('Вы были исключены из комнаты');
-      refreshRooms();
+      if (playing) stopLoop();
+      showGlobalError('Вы были исключены из комнаты');
     },
     onClose: () => {
       if (playing) stopLoop();
-      showScreen('menu');
-      showMenuError('Соединение с сервером потеряно');
+      showGlobalError('Соединение с сервером потеряно');
     },
   });
   net.connect();
@@ -281,6 +336,8 @@ function playersSignature(snap: Snapshot): string {
 }
 
 async function refreshRooms(): Promise<void> {
+  // Only poll while the menu (with the room list) is on screen.
+  if (!$('screen-menu').classList.contains('active')) return;
   try {
     const res = await fetch('/rooms');
     if (!res.ok) return;
@@ -294,10 +351,8 @@ async function refreshRooms(): Promise<void> {
 
 function renderRooms(): void {
   const filter = ($('room-filter') as HTMLInputElement).value;
-  renderRoomList(rooms, filter, (name) => {
-    ($('join-room-name') as HTMLInputElement).value = name;
-    ($('join-room-pass') as HTMLInputElement).focus();
-  });
+  const stateFilter = ($('room-state-filter') as HTMLSelectElement).value;
+  renderRoomList(rooms, filter, stateFilter, openJoin);
 }
 
 function handleSnapshot(snap: Snapshot): void {
@@ -447,9 +502,19 @@ function stepMyPaddle(dt: number): void {
     myAngle += dir * screenDir * (speed / faceLen) * dt;
     myAngle = Math.max(half, Math.min(1 - half, myAngle));
   } else if (inputSeq <= serverLastSeq) {
-    // Reconcile toward the authoritative server value only when idle AND the
-    // server has acknowledged all of our inputs (prevents rubber-banding).
-    myAngle += (serverMyAngle - myAngle) * Math.min(1, dt / 0.2);
+    // Our own paddle is rendered purely from local prediction (maximum
+    // responsiveness). The server runs a fixed 60 Hz tick while we step every
+    // animation frame, so after a move the server can differ from us by up to
+    // ~1 tick (~6-7 px at 380 px/s). Easing toward the server for such noise is
+    // what made the paddle "drift back" a few px after stopping, so we ignore
+    // errors up to ~2 ticks and only correct a genuine divergence (e.g. an
+    // input that never reached the server), eased back quickly.
+    const tickTravel = (speed / faceLen) / 60; // fraction of the face per 60 Hz tick
+    const deadZone = tickTravel * 2;
+    const err = serverMyAngle - myAngle;
+    if (Math.abs(err) > deadZone) {
+      myAngle += err * Math.min(1, dt / 0.15);
+    }
   }
 }
 
@@ -527,8 +592,7 @@ function leaveToMenu(): void {
   lastLobbySig = '';
   lastGameOverSig = '';
   gameOverInitDone = false;
-  refreshRooms();
-  showScreen('menu');
+  backToMenu();
 }
 
 function buildInviteLink(roomID: string): string {

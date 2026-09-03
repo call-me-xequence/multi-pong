@@ -172,14 +172,10 @@ func (r *Room) AddPlayer(id, name string) (*Player, error) {
 		p.IsHost = true
 		r.HostID = id
 	}
-	wasWaiting := r.State == StateWaiting
 	r.Players = append(r.Players, p)
 
-	// Auto-start only when filling up from the waiting state. After a match has
-	// ended, the host explicitly starts a rematch instead.
-	if wasWaiting && len(r.Players) >= r.MaxPlayers {
-		r.startLocked()
-	}
+	// The match does not auto-start when the room fills up: the host starts it
+	// explicitly (Room.Start) so everyone has a chance to get ready.
 	return p, nil
 }
 
@@ -292,7 +288,12 @@ func (r *Room) HandleInput(id string, dir int, seq uint32, lagMs float64) {
 			return
 		}
 
-		at := time.Now().Add(-time.Duration(lagMs * float64(time.Millisecond)))
+		// Anchor the input's "send time" in the simulation timeline rather than
+		// the wall clock. The world (ball, paddles, history) only ever advances
+		// in sim time, and sim time can drift slightly from the wall clock when
+		// the ticker is late, so using the wall clock makes rewinds inconsistent
+		// and lets paddles/balls jump.
+		at := r.simTime.Add(-time.Duration(lagMs * float64(time.Millisecond)))
 		p.Queue = append(p.Queue, queuedInput{Dir: dir, Seq: seq, At: at})
 
 		// If the input is more than one tick in the past, rewind and re-simulate.
@@ -315,6 +316,8 @@ func (r *Room) rewindToLocked(at time.Time) {
 	if snapIdx < 0 {
 		return
 	}
+
+	target := r.simTime // sim time the re-simulation must reach again
 	snap := r.history[snapIdx]
 	r.restoreLocked(&snap)
 
@@ -323,7 +326,15 @@ func (r *Room) rewindToLocked(at time.Time) {
 	r.history = r.history[:snapIdx+1]
 
 	dt := 1.0 / float64(r.Config.TickRate)
-	ticks := int(time.Since(snap.t).Seconds() / dt)
+	// Re-simulate exactly the ticks between the restored snapshot and the
+	// original sim time. Using the sim-time delta (not the wall clock) keeps the
+	// re-simulated timeline identical to the one already running, so a rewind
+	// never advances the world past where it would have been and never makes
+	// paddles/balls visibly jump.
+	ticks := int(math.Round(target.Sub(snap.t).Seconds() / dt))
+	if ticks < 0 {
+		ticks = 0
+	}
 	if ticks > maxRewindTicks {
 		ticks = maxRewindTicks
 	}
