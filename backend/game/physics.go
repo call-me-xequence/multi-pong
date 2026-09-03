@@ -8,7 +8,7 @@ import (
 	"neonpong/geometry"
 )
 
-// Update advances the simulation by dt seconds.
+// Update advances the simulation by dt seconds (one tick).
 func (r *Room) Update(dt float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -16,9 +16,21 @@ func (r *Room) Update(dt float64) {
 	if r.State != StatePlaying {
 		return
 	}
+	r.simTime = r.simTime.Add(time.Duration(dt * float64(time.Second)))
+	r.pushHistoryLocked()
+	r.simulate(dt, true)
+}
+
+// simulate runs one simulation tick. The caller must hold the write lock.
+// timedEvents disables slow periodic events (accel / add-ball / respawn) during
+// a rewind re-simulation so they don't fire twice.
+func (r *Room) simulate(dt float64, timedEvents bool) {
+	if r.State != StatePlaying {
+		return
+	}
+	r.drainInputsLocked()
 
 	cfg := r.Config
-	now := time.Now()
 
 	// 1. Move paddles from held inputs.
 	faceLen := cfg.FaceLength()
@@ -38,29 +50,33 @@ func (r *Room) Update(dt float64) {
 		}
 	}
 
-	// 2. Periodic ball acceleration (+AccelFactor every AccelInterval seconds).
-	if cfg.BallAccel && now.Sub(r.lastAccelAt).Seconds() >= cfg.AccelInterval {
-		r.currentBallSpeed *= cfg.AccelFactor
-		if r.currentBallSpeed > cfg.BallSpeedMax {
-			r.currentBallSpeed = cfg.BallSpeedMax
-		}
-		r.lastAccelAt = now
-		r.renormalizeBallsLocked()
-	}
+	if timedEvents {
+		now := time.Now()
 
-	// 3. Respawn a ball after a goal (short pause) and add extra balls on an
-	// interval (up to MaxBalls).
-	if !r.nextBallAt.IsZero() {
-		if now.After(r.nextBallAt) {
-			if len(r.Balls) < cfg.MaxBalls {
-				r.spawnBallLocked(r.randomAliveFaceLocked())
+		// 2. Periodic ball acceleration (+AccelFactor every AccelInterval seconds).
+		if cfg.BallAccel && now.Sub(r.lastAccelAt).Seconds() >= cfg.AccelInterval {
+			r.currentBallSpeed *= cfg.AccelFactor
+			if r.currentBallSpeed > cfg.BallSpeedMax {
+				r.currentBallSpeed = cfg.BallSpeedMax
 			}
-			r.nextBallAt = time.Time{}
+			r.lastAccelAt = now
+			r.renormalizeBallsLocked()
 		}
-	} else if cfg.AddBallInterval > 0 && len(r.Balls) < cfg.MaxBalls &&
-		now.Sub(r.lastAddBallAt).Seconds() >= cfg.AddBallInterval {
-		r.spawnBallLocked(-1)
-		r.lastAddBallAt = now
+
+		// 3. Respawn a ball after a goal (short pause) and add extra balls on an
+		// interval (up to MaxBalls).
+		if !r.nextBallAt.IsZero() {
+			if now.After(r.nextBallAt) {
+				if len(r.Balls) < cfg.MaxBalls {
+					r.spawnBallLocked(r.randomAliveFaceLocked())
+				}
+				r.nextBallAt = time.Time{}
+			}
+		} else if cfg.AddBallInterval > 0 && len(r.Balls) < cfg.MaxBalls &&
+			now.Sub(r.lastAddBallAt).Seconds() >= cfg.AddBallInterval {
+			r.spawnBallLocked(-1)
+			r.lastAddBallAt = now
+		}
 	}
 
 	// 4. Integrate balls and resolve collisions. Goals are collected and applied
@@ -98,6 +114,28 @@ func (r *Room) Update(dt float64) {
 	}
 	for i := range goalBalls {
 		r.applyGoalLocked(goalBalls[i], goalPlayers[i])
+	}
+}
+
+// drainInputsLocked applies queued player inputs whose time has come.
+func (r *Room) drainInputsLocked() {
+	for _, p := range r.Players {
+		if len(p.Queue) == 0 {
+			continue
+		}
+		kept := p.Queue[:0]
+		for _, in := range p.Queue {
+			if in.Seq <= p.LastSeq {
+				continue // stale or duplicate
+			}
+			if !in.At.After(r.simTime) {
+				p.InputDir = in.Dir
+				p.LastSeq = in.Seq
+			} else {
+				kept = append(kept, in)
+			}
+		}
+		p.Queue = kept
 	}
 }
 

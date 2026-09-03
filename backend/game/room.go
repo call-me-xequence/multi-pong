@@ -17,6 +17,13 @@ const (
 	StateEnded   = "ended"
 )
 
+// Lag compensation tuning.
+const (
+	maxHistory     = 20    // ~333 ms of rewound state at 60 Hz
+	maxRewindTicks = 15    // ~250 ms
+	maxRewindMs    = 250.0 // clamp the client-reported lag
+)
+
 // Room is a single match instance shared between several clients.
 type Room struct {
 	mu         sync.RWMutex
@@ -37,14 +44,42 @@ type Room struct {
 	faceOwner []int              // faceOwner[face] = index into Players, or -1
 
 	// Runtime.
+	simTime          time.Time
 	currentBallSpeed float64
 	startedAt        time.Time
 	lastAccelAt      time.Time
 	lastAddBallAt    time.Time
 	nextBallAt       time.Time // when the next ball spawns after a goal (zero = none pending)
+	history          []historyEntry
 
 	done   chan struct{}
 	onDone func()
+}
+
+// ballState and playerState capture the parts of the world needed to rewind.
+type ballState struct {
+	X, Y, VX, VY float64
+}
+
+type playerState struct {
+	Angle    float64
+	InputDir int
+	Lives    int
+	IsAlive  bool
+	LastSeq  uint32
+}
+
+type historyEntry struct {
+	t                time.Time
+	balls            []ballState
+	players          []playerState
+	currentBallSpeed float64
+	nextBallAt       time.Time
+	lastAccelAt      time.Time
+	lastAddBallAt    time.Time
+	startedAt        time.Time
+	state            string
+	winnerID         string
 }
 
 // NewRoom creates a room with the given config and capacity.
@@ -207,6 +242,7 @@ func (r *Room) Kick(hostID, targetID string) (*Player, error) {
 
 	target := r.Players[idx]
 	r.Players = append(r.Players[:idx], r.Players[idx+1:]...)
+	r.history = r.history[:0]
 
 	if r.State == StatePlaying {
 		r.onEliminationLocked()
@@ -215,28 +251,141 @@ func (r *Room) Kick(hostID, targetID string) (*Player, error) {
 	return target, nil
 }
 
-// SetInput records the currently held movement direction for a player. seq is
-// the client's input sequence number, echoed back in snapshots so the client
-// can reconcile its local prediction.
+// SetInput records the currently held movement direction for a player (no lag
+// compensation). Used by tests.
 func (r *Room) SetInput(id string, dir int, seq uint32) {
+	r.HandleInput(id, dir, seq, 0)
+}
+
+// HandleInput applies a player's movement input. If the input was sent `lagMs`
+// milliseconds ago, the simulation is rewound to that point and re-simulated so
+// a late paddle move can still block a ball it "would have" blocked.
+func (r *Room) HandleInput(id string, dir int, seq uint32, lagMs float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if dir > 1 {
+		dir = 1
+	}
+	if dir < -1 {
+		dir = -1
+	}
+
 	for _, p := range r.Players {
-		if p.ID == id {
-			// Ignore stale or duplicate inputs.
-			if seq < p.LastSeq {
-				return
-			}
-			if dir > 1 {
-				dir = 1
-			}
-			if dir < -1 {
-				dir = -1
-			}
+		if p.ID != id {
+			continue
+		}
+		if seq <= p.LastSeq {
+			return // stale or duplicate
+		}
+		if lagMs < 0 {
+			lagMs = 0
+		}
+		if lagMs > maxRewindMs {
+			lagMs = maxRewindMs
+		}
+
+		// Outside of active play there is no simulation to rewind; apply now.
+		if r.State != StatePlaying {
 			p.InputDir = dir
 			p.LastSeq = seq
 			return
 		}
+
+		at := time.Now().Add(-time.Duration(lagMs * float64(time.Millisecond)))
+		p.Queue = append(p.Queue, queuedInput{Dir: dir, Seq: seq, At: at})
+
+		// If the input is more than one tick in the past, rewind and re-simulate.
+		if r.simTime.Sub(at) > time.Second/time.Duration(r.Config.TickRate) {
+			r.rewindToLocked(at)
+		}
+		return
+	}
+}
+
+// rewindToLocked restores the world to `at` and re-simulates forward to now,
+// applying queued inputs as their time arrives.
+func (r *Room) rewindToLocked(at time.Time) {
+	snapIdx := -1
+	for i := range r.history {
+		if !r.history[i].t.After(at) {
+			snapIdx = i
+		}
+	}
+	if snapIdx < 0 {
+		return
+	}
+	snap := r.history[snapIdx]
+	r.restoreLocked(&snap)
+
+	// Drop any state recorded after the restore point: it no longer matches the
+	// re-simulated timeline.
+	r.history = r.history[:snapIdx+1]
+
+	dt := 1.0 / float64(r.Config.TickRate)
+	ticks := int(time.Since(snap.t).Seconds() / dt)
+	if ticks > maxRewindTicks {
+		ticks = maxRewindTicks
+	}
+	for i := 0; i < ticks; i++ {
+		r.simTime = r.simTime.Add(time.Duration(dt * float64(time.Second)))
+		r.simulate(dt, false)
+	}
+}
+
+// pushHistoryLocked records the current world state for future rewinds.
+func (r *Room) pushHistoryLocked() {
+	e := historyEntry{
+		t:                r.simTime,
+		currentBallSpeed: r.currentBallSpeed,
+		nextBallAt:       r.nextBallAt,
+		lastAccelAt:      r.lastAccelAt,
+		lastAddBallAt:    r.lastAddBallAt,
+		startedAt:        r.startedAt,
+		state:            r.State,
+		winnerID:         r.WinnerID,
+	}
+	for _, b := range r.Balls {
+		e.balls = append(e.balls, ballState{X: b.X, Y: b.Y, VX: b.VX, VY: b.VY})
+	}
+	for _, p := range r.Players {
+		e.players = append(e.players, playerState{
+			Angle: p.Angle, InputDir: p.InputDir,
+			Lives: p.Lives, IsAlive: p.IsAlive, LastSeq: p.LastSeq,
+		})
+	}
+	r.history = append(r.history, e)
+	if len(r.history) > maxHistory {
+		r.history = r.history[len(r.history)-maxHistory:]
+	}
+}
+
+// restoreLocked rolls the world back to a recorded snapshot. Player input
+// queues and connections are intentionally left untouched.
+func (r *Room) restoreLocked(snap *historyEntry) {
+	r.simTime = snap.t
+	r.currentBallSpeed = snap.currentBallSpeed
+	r.nextBallAt = snap.nextBallAt
+	r.lastAccelAt = snap.lastAccelAt
+	r.lastAddBallAt = snap.lastAddBallAt
+	r.startedAt = snap.startedAt
+	r.State = snap.state
+	r.WinnerID = snap.winnerID
+
+	r.Balls = r.Balls[:0]
+	for _, bs := range snap.balls {
+		r.Balls = append(r.Balls, &Ball{X: bs.X, Y: bs.Y, VX: bs.VX, VY: bs.VY, Radius: r.Config.BallRadius})
+	}
+	for i := range r.Players {
+		if i >= len(snap.players) {
+			break
+		}
+		ps := snap.players[i]
+		r.Players[i].Angle = ps.Angle
+		r.Players[i].InputDir = ps.InputDir
+		r.Players[i].Lives = ps.Lives
+		r.Players[i].IsAlive = ps.IsAlive
+		r.Players[i].LastSeq = ps.LastSeq
 	}
 }
 
@@ -310,9 +459,11 @@ func (r *Room) startLocked() {
 
 	now := time.Now()
 	r.startedAt = now
+	r.simTime = now
 	r.lastAccelAt = now
 	r.lastAddBallAt = now
 	r.nextBallAt = time.Time{}
+	r.history = r.history[:0]
 	r.State = StatePlaying
 }
 
@@ -400,6 +551,7 @@ func (r *Room) onEliminationLocked() {
 	}
 
 	r.rebuildGeometryLocked()
+	r.history = r.history[:0]
 	for _, b := range r.Balls {
 		if r.pointOutsideLocked(b.X, b.Y) {
 			r.respawnBallLocked(b, r.randomAliveFaceLocked())

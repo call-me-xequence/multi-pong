@@ -121,6 +121,7 @@ func (h *Hub) WSHandler(c *gin.Context) {
 			Action      string  `json:"action"`
 			Dir         int     `json:"dir"`
 			Seq         uint32  `json:"seq"`
+			Lag         float64 `json:"lag"`
 			C           float64 `json:"c"`
 			Target      string  `json:"target"`
 			Lives       int     `json:"lives"`
@@ -132,7 +133,7 @@ func (h *Hub) WSHandler(c *gin.Context) {
 		}
 		switch msg.Action {
 		case "move":
-			room.SetInput(playerID, msg.Dir, msg.Seq)
+			room.HandleInput(playerID, msg.Dir, msg.Seq, msg.Lag)
 		case "start":
 			if err := room.Start(playerID); err != nil {
 				queueJSON(player, map[string]interface{}{

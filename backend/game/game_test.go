@@ -272,6 +272,9 @@ func TestInputSequenceEcho(t *testing.T) {
 	r.SetInput("a", -1, 9)
 	r.SetInput("a", 0, 5) // older/out-of-order seq must be ignored
 
+	// Inputs are queued during play (lag compensation) and applied on the next tick.
+	r.Update(1.0 / float64(cfg.TickRate))
+
 	r.mu.RLock()
 	last := r.Players[0].LastSeq
 	dir := r.Players[0].InputDir
@@ -296,6 +299,73 @@ func TestInputSequenceEcho(t *testing.T) {
 	}
 	if len(snap.Players) != 2 || snap.Players[0].LastSeq != 9 {
 		t.Fatalf("snapshot lastSeq not echoed: %+v", snap.Players)
+	}
+}
+
+func TestLagCompensationBlocksLateInput(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Sides = 4
+	cfg.Radius = 300
+	cfg.BallSpeed = 260
+	cfg.BallAccel = false
+	cfg.AddBallInterval = 0
+	cfg.RespawnDelay = 100 // effectively disable respawn during the test
+
+	dt := 1.0 / float64(cfg.TickRate)
+
+	makeRoom := func() *Room {
+		r := NewRoom("lc", cfg, 4)
+		for i := 0; i < 4; i++ {
+			if _, err := r.AddPlayer("p"+string(rune('a'+i)), "P"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// Backdate simTime so the fast test loop stays aligned with wall-clock time
+		// (lag compensation timestamps inputs with time.Now()).
+		r.mu.Lock()
+		r.simTime = time.Now().Add(-45 * time.Duration(dt*float64(time.Second)))
+		r.mu.Unlock()
+		return r
+	}
+	setup := func(r *Room) {
+		r.mu.Lock()
+		b := r.Balls[0]
+		b.X, b.Y = 0, 0
+		angle := geometry.FaceMidAngle(4, 0)
+		b.VX = cfg.BallSpeed * math.Cos(angle)
+		b.VY = cfg.BallSpeed * math.Sin(angle)
+		// Paddle off-center: the ball (aimed at the face center) will miss and score.
+		r.Players[0].Angle = 0.85
+		r.mu.Unlock()
+	}
+
+	// Control: the input arrives too late for the paddle to reach the crossing point.
+	late := makeRoom()
+	setup(late)
+	for i := 0; i < 40; i++ {
+		late.Update(dt)
+	}
+	late.HandleInput("pa", -1, 1, 0)
+	for i := 0; i < 20; i++ {
+		late.Update(dt)
+	}
+	if late.Players[0].Lives >= cfg.Lives {
+		t.Fatalf("control: expected the ball to score without lag compensation")
+	}
+
+	// Lag compensated: the same input, reported 250ms late, must be replayed
+	// earlier and block the ball.
+	comp := makeRoom()
+	setup(comp)
+	for i := 0; i < 40; i++ {
+		comp.Update(dt)
+	}
+	comp.HandleInput("pa", -1, 1, 250)
+	for i := 0; i < 20; i++ {
+		comp.Update(dt)
+	}
+	if comp.Players[0].Lives < cfg.Lives {
+		t.Fatalf("lag compensation failed: ball scored on a paddle that moved in time")
 	}
 }
 

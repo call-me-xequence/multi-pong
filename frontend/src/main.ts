@@ -181,7 +181,7 @@ function setKey(which: 'left' | 'right', down: boolean): void {
     inputDir = dir;
     const screenDir = renderer ? renderer.getFaceScreenDirX() : 1;
     inputSeq++;
-    net?.send({ action: 'move', dir: dir * screenDir, seq: inputSeq });
+    net?.send({ action: 'move', dir: dir * screenDir, seq: inputSeq, lag: net.getLatency() });
   }
 }
 

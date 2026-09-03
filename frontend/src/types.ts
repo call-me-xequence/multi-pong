@@ -73,6 +73,7 @@ export interface ClientMoveMessage {
   action: 'move';
   dir: number; // +1, -1 or 0
   seq?: number; // input sequence number, for reconciliation
+  lag?: number; // measured one-way latency in ms, for server-side lag compensation
 }
 
 export interface ClientStartMessage {

@@ -1,5 +1,14 @@
 package game
 
+import "time"
+
+// queuedInput is a movement input waiting to be applied at a specific sim time.
+type queuedInput struct {
+	Dir int
+	Seq uint32
+	At  time.Time
+}
+
 // Player represents a single participant in a room.
 type Player struct {
 	ID      string  `json:"id"`
@@ -15,6 +24,9 @@ type Player struct {
 
 	// LastSeq is the sequence number of the last processed move input.
 	LastSeq uint32
+
+	// Queue holds inputs received out of order, applied when their sim time arrives.
+	Queue []queuedInput
 
 	// Send is the outbound queue consumed by the player's WebSocket writer goroutine.
 	Send chan []byte
