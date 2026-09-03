@@ -47,6 +47,7 @@ const (
 	stickyStickTime = 0.6 // seconds a sticky ball sticks after a collision
 	fireSpeedBoost  = 0.5 // +50%
 	curveRate       = 3.5 // rad/s the curve ball bends
+	curveLifeSec    = 3.0 // seconds a curve ball keeps bending
 	tetherMaxHits   = 3   // opponent paddle bounces before the rope breaks
 	tetherPaddleLen = 2.0 // rope length in paddle lengths
 	iconHold        = 2.5 // seconds the "just used" icon stays behind the goal
@@ -322,19 +323,22 @@ func rotateVel(vx, vy, rad float64) (float64, float64) {
 }
 
 // applyCurveLocked bends a curve ball's direction by a fixed angular rate so the
-// path is fully predictable from the ball's state (client mirrors this).
+// path is fully predictable from the ball's state (client mirrors this). The
+// effect decays every tick so a curve ball always straightens out.
 func (r *Room) applyCurveLocked(b *Ball, dt float64) {
 	if b.Curve <= 0 || !b.StuckUntil.IsZero() {
 		return
 	}
 	spd := math.Hypot(b.VX, b.VY)
 	if spd == 0 {
+		b.Curve = 0
 		return
 	}
 	nx, ny := b.VX/spd, b.VY/spd
 	rx, ry := rotateVel(nx, ny, curveRate*dt)
 	b.VX = rx * spd
 	b.VY = ry * spd
+	b.Curve--
 }
 
 // tickTetherLocked snaps a tethered ball back to its anchor paddle when the
@@ -352,6 +356,10 @@ func (r *Room) tickTetherLocked(b *Ball) {
 		}
 	}
 	if anchor == nil || !anchor.IsAlive || anchor.Index < 0 {
+		// The rope's anchor is gone: break the tether.
+		b.TetherOwner = ""
+		b.TetherTarget = ""
+		b.TetherHits = 0
 		return
 	}
 	seg := r.Faces[anchor.Index]
@@ -388,6 +396,11 @@ func (r *Room) removeFakeOutsideZoneLocked() {
 		}
 	}
 	r.Balls = kept
+	// If a removed fake was the only ball, make sure a replacement is scheduled so
+	// the match never stalls with an empty arena.
+	if r.State == StatePlaying && len(r.Balls) == 0 && r.nextBallAt.IsZero() {
+		r.nextBallAt = time.Now()
+	}
 }
 
 // --- Collision hooks ---------------------------------------------------------
@@ -449,7 +462,7 @@ func (r *Room) triggerItemOnPaddleHitLocked(b *Ball, p *Player) {
 		b.Sticky = true
 	case ItemCurve:
 		p.CurvedArm = false
-		b.Curve = 2
+		b.Curve = int(curveLifeSec * float64(r.Config.TickRate))
 	case ItemFlash:
 		p.FlashArm = false
 		now := time.Now()

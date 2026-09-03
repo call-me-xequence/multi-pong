@@ -193,7 +193,8 @@ export function updateItemSlot(snap: Snapshot): void {
   if (!snap.items) return;
 
   const me = snap.players.find((p) => p.id === snap.you);
-  const key = me?.item || '';
+  // Spectators can't use items, so don't show them a stale held item.
+  const key = me && me.isAlive ? me.item || '' : '';
   const ctx = cv.getContext('2d');
   if (ctx) {
     ctx.clearRect(0, 0, cv.width, cv.height);

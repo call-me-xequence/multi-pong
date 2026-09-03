@@ -208,11 +208,11 @@ function setKey(which: 'left' | 'right', down: boolean): void {
   }
 }
 
-/** Space: use the held power-up item. */
+/** Space: use the held power-up item (alive players only). */
 function useItem(): void {
   if (!playing) return;
   const me = latestSnap?.players.find((p) => p.id === meID);
-  if (me && me.item) {
+  if (me && me.isAlive && me.item) {
     net?.send({ action: 'use_item' });
   }
 }
@@ -515,7 +515,10 @@ function stepMyPaddle(dt: number): void {
   const dir = (keys.right ? 1 : 0) + (keys.left ? -1 : 0);
   const screenDir = renderer.getFaceScreenDirX();
   const faceLen = 2 * latestSnap.radius * Math.sin(Math.PI / latestSnap.sides);
-  const speed = latestSnap.paddleSpeed || 380;
+  // The server runs frozen players at half speed (frozenSpeedFactor); mirror it
+  // locally or our predicted paddle overshoots and gets yanked back every move
+  // while the freeze is active.
+  const speed = (latestSnap.paddleSpeed || 380) * ((me.fx?.frozen ?? 0) > 0 ? 0.5 : 1);
   const half = latestSnap.paddleHalf;
 
   if (dir !== 0) {

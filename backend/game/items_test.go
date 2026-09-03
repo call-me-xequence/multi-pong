@@ -242,3 +242,101 @@ func TestEveryItemShowsIconMarker(t *testing.T) {
 		}
 	}
 }
+
+// The arming contact of the Sticky item clings to the paddle (ball becomes
+// sticky and stuck), instead of just bouncing off.
+func TestStickyArmSticksOnContact(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AddBallInterval = 0
+	cfg.RespawnDelay = 100
+	r := NewRoom("stick", cfg, 2)
+	_, _ = r.AddPlayer("a", "A")
+	_, _ = r.AddPlayer("b", "B")
+	if err := r.Start("a"); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.Players[0].StickyArmT = time.Now().Add(5 * time.Second)
+	r.mu.Unlock()
+	b := r.Balls[0]
+	b.X, b.Y = 0, 0
+	angle := geometry.FaceMidAngle(4, 0)
+	b.VX = 260 * math.Cos(angle)
+	b.VY = 260 * math.Sin(angle)
+
+	for i := 0; i < 240; i++ {
+		r.Update(1.0 / 60.0)
+		r.mu.RLock()
+		if len(r.Balls) == 0 {
+			r.mu.RUnlock()
+			t.Fatal("ball scored before sticky contact")
+		}
+		stuck := r.Balls[0].Sticky && !r.Balls[0].StuckUntil.IsZero()
+		armed := r.Players[0].StickyArmT.IsZero()
+		r.mu.RUnlock()
+		if stuck && armed {
+			return // first contact stuck to the paddle
+		}
+	}
+	t.Fatal("sticky item never stuck to the paddle on contact")
+}
+
+// A curve ball must stop curving (Curve decays to 0) after a finite time even
+// if it never hits anything, not rotate forever.
+func TestCurveBallEventuallyStraightens(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AddBallInterval = 0
+	cfg.RespawnDelay = 100
+	r := NewRoom("curve", cfg, 2)
+	_, _ = r.AddPlayer("a", "A")
+	_, _ = r.AddPlayer("b", "B")
+	if err := r.Start("a"); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.Players[0].CurvedArm = true
+	r.mu.Unlock()
+
+	dt := 1.0 / float64(cfg.TickRate)
+
+	// Phase 1: the user's paddle arms the curve.
+	b := r.Balls[0]
+	b.X, b.Y = 0, 0
+	angle := geometry.FaceMidAngle(4, 0)
+	b.VX = 260 * math.Cos(angle)
+	b.VY = 260 * math.Sin(angle)
+	armed := false
+	for i := 0; i < 150; i++ {
+		r.Update(dt)
+		r.mu.RLock()
+		armed = len(r.Balls) > 0 && r.Balls[0].Curve > 0
+		r.mu.RUnlock()
+		if armed {
+			break
+		}
+	}
+	if !armed {
+		t.Fatal("curve was never armed on paddle contact")
+	}
+
+	// Phase 2: point the curved ball at an unowned wall (no goal), let it fly and
+	// decay. If it ever scored, the ball would vanish - so we just let it bounce.
+	r.mu.Lock()
+	b2 := r.Balls[0]
+	b2.X, b2.Y = 0, 0
+	angle2 := geometry.FaceMidAngle(4, 1) // unowned face of the diamond
+	b2.VX = 260 * math.Cos(angle2)
+	b2.VY = 260 * math.Sin(angle2)
+	r.mu.Unlock()
+
+	for i := 0; i < 60*10; i++ {
+		r.Update(dt)
+		r.mu.RLock()
+		done := len(r.Balls) > 0 && r.Balls[0].Curve == 0
+		r.mu.RUnlock()
+		if done {
+			return // decayed to 0 as expected
+		}
+	}
+	t.Fatal("curve ball never stopped curving (Curve stuck > 0)")
+}

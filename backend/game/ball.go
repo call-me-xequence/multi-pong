@@ -14,7 +14,7 @@ type Ball struct {
 	// Item extras (all guarded by Room.mu).
 	SpeedMul float64 // speed multiplier, used when the ball is on fire (1.5)
 	OnFire   bool    // fiery ball: flies 50% faster
-	Curve    int     // >0 while the ball flies along an arc (decrements on collisions)
+	Curve    int     // >0 while the ball flies along an arc (decays every tick)
 	Sticky   bool    // sticky ball: briefly sticks on any collision
 
 	StuckUntil time.Time // while set the ball is stuck (velocity zero)

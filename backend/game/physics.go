@@ -225,7 +225,12 @@ func (r *Room) handleFace(b *Ball, seg geometry.Segment, p *Player, px, py float
 	// Paddle zone (tips included): bounce the ball back.
 	if t >= center-hitHalf && t <= center+hitHalf {
 		if outward > 0 && sdNow >= -b.Radius {
-			if b.Sticky {
+			if b.Sticky || !p.StickyArmT.IsZero() {
+				// The arming contact of the sticky item sticks to the paddle too.
+				if !b.Sticky {
+					b.Sticky = true
+					p.StickyArmT = time.Time{}
+				}
 				// Sticky ball clings to the paddle for a moment.
 				r.stickToPaddleLocked(b, seg, n, p, t)
 				return false

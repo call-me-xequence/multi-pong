@@ -301,9 +301,6 @@ export class GameRenderer {
         ctx.quadraticCurveTo(cpx, cpy, ac.x, ac.y);
       }
       ctx.stroke();
-      // rope texture ticks
-      ctx.strokeStyle = 'rgba(240,210,170,0.7)';
-      ctx.lineWidth = 1.2;
       ctx.restore();
     });
   }

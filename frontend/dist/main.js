@@ -784,8 +784,6 @@ var GameRenderer = class {
         ctx.quadraticCurveTo(cpx, cpy, ac.x, ac.y);
       }
       ctx.stroke();
-      ctx.strokeStyle = "rgba(240,210,170,0.7)";
-      ctx.lineWidth = 1.2;
       ctx.restore();
     });
   }
@@ -1106,7 +1104,7 @@ function updateItemSlot(snap) {
   slot.classList.toggle("hidden", !snap.items);
   if (!snap.items) return;
   const me = snap.players.find((p) => p.id === snap.you);
-  const key = me?.item || "";
+  const key = me && me.isAlive ? me.item || "" : "";
   const ctx = cv.getContext("2d");
   if (ctx) {
     ctx.clearRect(0, 0, cv.width, cv.height);
@@ -1288,7 +1286,7 @@ function setKey(which, down) {
 function useItem() {
   if (!playing) return;
   const me = latestSnap?.players.find((p) => p.id === meID);
-  if (me && me.item) {
+  if (me && me.isAlive && me.item) {
     net?.send({ action: "use_item" });
   }
 }
@@ -1549,7 +1547,7 @@ function stepMyPaddle(dt) {
   const dir = (keys.right ? 1 : 0) + (keys.left ? -1 : 0);
   const screenDir = renderer.getFaceScreenDirX();
   const faceLen = 2 * latestSnap.radius * Math.sin(Math.PI / latestSnap.sides);
-  const speed = latestSnap.paddleSpeed || 380;
+  const speed = (latestSnap.paddleSpeed || 380) * ((me.fx?.frozen ?? 0) > 0 ? 0.5 : 1);
   const half = latestSnap.paddleHalf;
   if (dir !== 0) {
     myAngle += dir * screenDir * (speed / faceLen) * dt;

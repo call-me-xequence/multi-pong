@@ -157,11 +157,10 @@ func (h *Hub) WSHandler(c *gin.Context) {
 				})
 			}
 		case "use_item":
-			if err := room.UseItem(playerID); err != nil {
-				queueJSON(player, map[string]interface{}{
-					"type": "error", "message": err.Error(),
-				})
-			}
+			// Space can auto-repeat, and the client may race the snapshot that
+			// clears the slot, so a failed use is ignored rather than treated as a
+			// fatal connection error (which would boot the player from the match).
+			_ = room.UseItem(playerID)
 		case "ping":
 			queueJSON(player, map[string]interface{}{
 				"type": "pong",
