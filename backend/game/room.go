@@ -199,37 +199,14 @@ func (r *Room) Start(hostID string) error {
 // startLocked performs the actual start (caller must hold the write lock).
 func (r *Room) startLocked() {
 	cfg := r.Config
-	n := len(r.Players)
-
-	// A regular polygon needs >= 3 sides, so a 2-player match uses a 4-sided
-	// arena (a diamond) where two opposite faces are goals and the other two
-	// are plain walls.
-	arenaSides := n
-	if arenaSides == 2 {
-		arenaSides = 4
-	}
-	cfg.Sides = arenaSides
-
-	for i, p := range r.Players {
+	for _, p := range r.Players {
 		p.Angle = 0.5
 		p.Lives = cfg.Lives
 		p.IsAlive = true
-		if n == 2 {
-			p.Index = 2 * i // 0 and 2 (opposite faces)
-		} else {
-			p.Index = i
-		}
 	}
 
-	r.faceOwner = make([]int, arenaSides)
-	for i := range r.faceOwner {
-		r.faceOwner[i] = -1
-	}
-	for i, p := range r.Players {
-		r.faceOwner[p.Index] = i
-	}
+	r.rebuildGeometryLocked()
 
-	r.buildGeometryLocked()
 	r.currentBallSpeed = cfg.BallSpeed
 	r.Balls = r.Balls[:0]
 	r.spawnBallLocked(0)
@@ -259,6 +236,94 @@ func (r *Room) buildGeometryLocked() {
 	for i := 0; i < n; i++ {
 		r.Faces = append(r.Faces, r.Walls[2*i])
 	}
+}
+
+// rebuildGeometryLocked assigns faces to the surviving players and rebuilds the
+// arena for the new player count (caller must hold the write lock). A regular
+// polygon needs >= 3 sides, so a 2-player match uses a 4-sided arena where the
+// two opposite faces are goals and the other two are plain walls.
+func (r *Room) rebuildGeometryLocked() {
+	type owner struct {
+		p         *Player
+		playerIdx int
+	}
+	alive := make([]owner, 0, len(r.Players))
+	for i, p := range r.Players {
+		if p.IsAlive {
+			alive = append(alive, owner{p, i})
+		}
+	}
+
+	n := len(alive)
+	arenaSides := n
+	if arenaSides == 2 {
+		arenaSides = 4
+	}
+	r.Config.Sides = arenaSides
+
+	for j, o := range alive {
+		if n == 2 {
+			o.p.Index = 2 * j
+		} else {
+			o.p.Index = j
+		}
+	}
+	// Eliminated players become spectators: they own no face.
+	for _, p := range r.Players {
+		if !p.IsAlive {
+			p.Index = -1
+		}
+	}
+
+	r.faceOwner = make([]int, arenaSides)
+	for i := range r.faceOwner {
+		r.faceOwner[i] = -1
+	}
+	for _, o := range alive {
+		r.faceOwner[o.p.Index] = o.playerIdx
+	}
+
+	r.buildGeometryLocked()
+}
+
+// onEliminationLocked re-forms the field for the remaining players and respawns
+// any ball that ended up outside the new, smaller polygon.
+func (r *Room) onEliminationLocked() {
+	if r.State != StatePlaying {
+		return
+	}
+	alive := 0
+	for _, p := range r.Players {
+		if p.IsAlive {
+			alive++
+		}
+	}
+	if alive < 2 {
+		return
+	}
+
+	r.rebuildGeometryLocked()
+	for _, b := range r.Balls {
+		if r.pointOutsideLocked(b.X, b.Y) {
+			r.respawnBallLocked(b, r.randomAliveFaceLocked())
+		}
+	}
+}
+
+// pointOutsideLocked reports whether the point (x,y) lies outside the arena.
+func (r *Room) pointOutsideLocked(x, y float64) bool {
+	for _, seg := range r.Walls {
+		mid := geometry.Mul(geometry.Add(seg.A, seg.B), 0.5)
+		n := geometry.Norm(mid)
+		if geometry.Len(n) == 0 {
+			continue
+		}
+		c := geometry.Dot(seg.A, n)
+		if geometry.Dot(geometry.Point{X: x, Y: y}, n) > c {
+			return true
+		}
+	}
+	return false
 }
 
 // respawnBallLocked places the ball at the center with a random direction.

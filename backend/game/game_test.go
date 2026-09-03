@@ -298,3 +298,138 @@ func TestInputSequenceEcho(t *testing.T) {
 		t.Fatalf("snapshot lastSeq not echoed: %+v", snap.Players)
 	}
 }
+
+func TestSixPlayerReformAndLeftPaddle(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AddBallInterval = 0
+
+	r := NewRoom("six", cfg, 6)
+	for i := 0; i < 6; i++ {
+		if _, err := r.AddPlayer("p"+string(rune('a'+i)), "P"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r.Config.Sides != 6 {
+		t.Fatalf("expected 6 sides at start, got %d", r.Config.Sides)
+	}
+	if len(r.Walls) != 12 {
+		t.Fatalf("expected 12 wall segments (6 faces + 6 chamfers), got %d", len(r.Walls))
+	}
+
+	// Aim the ball at the left face (face 4) center, where its paddle sits.
+	b := r.Balls[0]
+	b.X, b.Y = 0, 0
+	angle := geometry.FaceMidAngle(6, 4)
+	b.VX = 260 * math.Cos(angle)
+	b.VY = 260 * math.Sin(angle)
+
+	lives := r.Players[4].Lives
+	for i := 0; i < 180; i++ {
+		r.Update(1.0 / 60.0)
+	}
+	if r.Players[4].Lives < lives {
+		t.Fatalf("ball scored on the left player's centered paddle (lives %d -> %d)", lives, r.Players[4].Lives)
+	}
+
+	// Eliminate player F -> field must re-form to a pentagon.
+	r.mu.Lock()
+	r.eliminateLocked("pf")
+	r.mu.Unlock()
+	if r.State != StatePlaying {
+		t.Fatalf("expected still playing, got %s", r.State)
+	}
+	if r.Config.Sides != 5 {
+		t.Fatalf("expected 5 sides after elimination, got %d", r.Config.Sides)
+	}
+	if len(r.Walls) != 10 {
+		t.Fatalf("expected 10 wall segments after re-form, got %d", len(r.Walls))
+	}
+	if r.Players[5].Index != -1 {
+		t.Fatalf("eliminated player should be a spectator, got index %d", r.Players[5].Index)
+	}
+
+	// Keep simulating to ensure the re-formed arena is stable.
+	for i := 0; i < 240; i++ {
+		r.Update(1.0 / 60.0)
+	}
+}
+
+func TestGeometryIsConvexForAllSides(t *testing.T) {
+	for sides := 3; sides <= 6; sides++ {
+		cfg := DefaultConfig()
+		cfg.Sides = sides
+		cfg.Chamfer = 40
+		r := NewRoom("g", cfg, sides)
+		r.buildGeometryLocked()
+
+		// Every wall segment's line must have the origin strictly on the inner
+		// side (dot(p, n) < dot(seg.A, n) for p=(0,0)).
+		for _, seg := range r.Walls {
+			mid := geometry.Mul(geometry.Add(seg.A, seg.B), 0.5)
+			n := geometry.Norm(mid)
+			if geometry.Len(n) == 0 {
+				t.Fatalf("sides=%d: zero normal", sides)
+			}
+			c := geometry.Dot(seg.A, n)
+			if geometry.Dot(geometry.Point{X: 0, Y: 0}, n) >= c {
+				t.Fatalf("sides=%d: origin not inside wall half-plane (c=%.3f)", sides, c)
+			}
+		}
+	}
+}
+
+func TestFieldReformsOnElimination(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AddBallInterval = 0
+
+	r := NewRoom("fr", cfg, 4)
+	for _, id := range []string{"pa", "pb", "pc", "pd"} {
+		if _, err := r.AddPlayer(id, "P"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r.Config.Sides != 4 {
+		t.Fatalf("expected 4 sides at start, got %d", r.Config.Sides)
+	}
+
+	// Eliminate player C -> 3 players remain -> triangle arena.
+	r.mu.Lock()
+	r.eliminateLocked("pc")
+	r.mu.Unlock()
+
+	if r.State != StatePlaying {
+		t.Fatalf("expected still playing, got %s", r.State)
+	}
+	if r.Config.Sides != 3 {
+		t.Fatalf("expected 3 sides after one elimination, got %d", r.Config.Sides)
+	}
+	if r.Players[2].Index != -1 || r.Players[2].IsAlive {
+		t.Fatalf("eliminated player should be a spectator (index -1): %+v", r.Players[2])
+	}
+	if r.Players[0].Index != 0 || r.Players[1].Index != 1 || r.Players[3].Index != 2 {
+		t.Fatalf("unexpected face reassignment: %d %d %d",
+			r.Players[0].Index, r.Players[1].Index, r.Players[3].Index)
+	}
+
+	// Eliminate player B -> 2 players remain -> 4-sided diamond arena.
+	r.mu.Lock()
+	r.eliminateLocked("pb")
+	r.mu.Unlock()
+	if r.Config.Sides != 4 {
+		t.Fatalf("expected 4 sides for 2 players, got %d", r.Config.Sides)
+	}
+	if r.Players[1].Index != -1 {
+		t.Fatalf("eliminated player B should be a spectator: %d", r.Players[1].Index)
+	}
+	if r.Players[0].Index != 0 || r.Players[3].Index != 2 {
+		t.Fatalf("unexpected 2-player faces: %d %d", r.Players[0].Index, r.Players[3].Index)
+	}
+
+	// Eliminate player A -> one remains -> match ends.
+	r.mu.Lock()
+	r.eliminateLocked("pa")
+	r.mu.Unlock()
+	if r.State != StateEnded {
+		t.Fatalf("expected ended, got %s", r.State)
+	}
+}

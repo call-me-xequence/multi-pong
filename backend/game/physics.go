@@ -199,12 +199,6 @@ func (r *Room) collideWall(b *Ball, seg geometry.Segment) {
 	if dot < 0 {
 		b.VX -= 2 * dot * nx
 		b.VY -= 2 * dot * ny
-
-		// 5% random perturbation of the outgoing direction.
-		spd := math.Hypot(b.VX, b.VY)
-		angle := math.Atan2(b.VY, b.VX) + (rand.Float64()*2-1)*0.09
-		b.VX = spd * math.Cos(angle)
-		b.VY = spd * math.Sin(angle)
 	}
 
 	// Push the ball out of the wall.
@@ -223,19 +217,25 @@ func (r *Room) containBallLocked(b *Ball) {
 // arena is now empty, schedules the next ball after a short pause.
 func (r *Room) applyGoalLocked(b *Ball, p *Player) {
 	p.Lives--
+	eliminated := false
 	if p.Lives <= 0 {
 		p.Lives = 0
 		p.IsAlive = false
+		eliminated = true
 	}
 
 	r.removeBallLocked(b)
+	if eliminated {
+		r.onEliminationLocked()
+	}
 	if len(r.Balls) == 0 {
 		r.nextBallAt = time.Now().Add(time.Duration(r.Config.RespawnDelay * float64(time.Second)))
 	}
 	r.checkEndLocked()
 }
 
-// eliminateLocked marks a disconnected player as dead and checks for a winner.
+// eliminateLocked marks a disconnected player as dead, re-forms the field and
+// checks for a winner.
 func (r *Room) eliminateLocked(id string) {
 	for _, p := range r.Players {
 		if p.ID == id {
@@ -244,6 +244,7 @@ func (r *Room) eliminateLocked(id string) {
 			break
 		}
 	}
+	r.onEliminationLocked()
 	r.checkEndLocked()
 }
 
