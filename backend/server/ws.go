@@ -28,6 +28,7 @@ const (
 func (h *Hub) WSHandler(c *gin.Context) {
 	roomID := c.Query("roomID")
 	playerName := c.Query("playerName")
+	password := c.Query("password")
 
 	if roomID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "roomID is required"})
@@ -49,6 +50,11 @@ func (h *Hub) WSHandler(c *gin.Context) {
 	room, ok := h.GetRoom(roomID)
 	if !ok {
 		_ = conn.WriteJSON(map[string]interface{}{"type": "error", "message": "room not found"})
+		_ = conn.Close()
+		return
+	}
+	if !room.CheckPassword(password) {
+		_ = conn.WriteJSON(map[string]interface{}{"type": "error", "message": "wrong password"})
 		_ = conn.Close()
 		return
 	}
@@ -91,6 +97,10 @@ func (h *Hub) WSHandler(c *gin.Context) {
 			select {
 			case <-done:
 				return
+			case <-player.Kick:
+				_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"kicked"}`))
+				return
 			case msg := <-player.Send:
 				_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
 				if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
@@ -108,10 +118,14 @@ func (h *Hub) WSHandler(c *gin.Context) {
 	// Reader loop: parses incoming client commands.
 	for {
 		var msg struct {
-			Action string  `json:"action"`
-			Dir    int     `json:"dir"`
-			Seq    uint32  `json:"seq"`
-			C      float64 `json:"c"`
+			Action      string  `json:"action"`
+			Dir         int     `json:"dir"`
+			Seq         uint32  `json:"seq"`
+			C           float64 `json:"c"`
+			Target      string  `json:"target"`
+			Lives       int     `json:"lives"`
+			BallAccel   bool    `json:"ballAccel"`
+			AddBallTime int     `json:"addBallTime"`
 		}
 		if err := conn.ReadJSON(&msg); err != nil {
 			break
@@ -121,6 +135,21 @@ func (h *Hub) WSHandler(c *gin.Context) {
 			room.SetInput(playerID, msg.Dir, msg.Seq)
 		case "start":
 			if err := room.Start(playerID); err != nil {
+				queueJSON(player, map[string]interface{}{
+					"type": "error", "message": err.Error(),
+				})
+			}
+		case "kick":
+			target, err := room.Kick(playerID, msg.Target)
+			if err != nil {
+				queueJSON(player, map[string]interface{}{
+					"type": "error", "message": err.Error(),
+				})
+			} else if target != nil {
+				close(target.Kick)
+			}
+		case "config":
+			if err := room.UpdateConfig(playerID, msg.Lives, msg.BallAccel, msg.AddBallTime); err != nil {
 				queueJSON(player, map[string]interface{}{
 					"type": "error", "message": err.Error(),
 				})

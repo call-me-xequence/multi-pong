@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,22 +23,31 @@ func NewHub() *Hub {
 	return h
 }
 
-// CreateRoom builds a room, starts its game loop and registers it.
-func (h *Hub) CreateRoom(cfg *game.GameConfig, maxPlayers int) *game.Room {
-	id := randomID()
-	r := game.NewRoom(id, cfg, maxPlayers)
-	r.SetDoneCallback(func() {
-		h.mu.Lock()
-		delete(h.rooms, id)
-		h.mu.Unlock()
-	})
+// CreateRoom builds a room keyed by its unique name, starts its game loop and
+// registers it.
+func (h *Hub) CreateRoom(name, password string, cfg *game.GameConfig, maxPlayers int) (*game.Room, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, game.ErrInvalidName
+	}
 
 	h.mu.Lock()
-	h.rooms[id] = r
+	if _, exists := h.rooms[name]; exists {
+		h.mu.Unlock()
+		return nil, game.ErrRoomExists
+	}
+	r := game.NewRoom(name, cfg, maxPlayers)
+	r.Password = password
+	r.SetDoneCallback(func() {
+		h.mu.Lock()
+		delete(h.rooms, name)
+		h.mu.Unlock()
+	})
+	h.rooms[name] = r
 	h.mu.Unlock()
 
 	go r.RunLoop()
-	return r
+	return r, nil
 }
 
 // GetRoom looks up a room by ID.

@@ -376,3 +376,76 @@ input[type='checkbox'] {
   justify-content: center;
   flex-wrap: wrap;
 }
+
+/* Room list on the menu */
+.room-list-card {
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.room-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.room-list-head h3 {
+  letter-spacing: 1px;
+  font-size: 15px;
+  color: var(--muted);
+}
+
+.room-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(0, 240, 255, 0.12);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.room-row:hover {
+  border-color: var(--accent);
+  background: rgba(0, 240, 255, 0.08);
+}
+
+.btn-sm {
+  flex: none;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+
+.btn-kick {
+  flex: none;
+  margin-left: auto;
+  padding: 5px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  background: rgba(255, 45, 70, 0.12);
+  border-color: rgba(255, 45, 70, 0.4);
+  color: #ff7a8a;
+}
+
+.btn-kick:hover {
+  background: rgba(255, 45, 70, 0.25);
+}
+
+/* Game-over: host config + kick list */
+.game-over-config {
+  width: min(360px, 90vw);
+  text-align: left;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+#game-over-kick-list {
+  width: min(360px, 90vw);
+  max-height: 28vh;
+  overflow-y: auto;
+}
+

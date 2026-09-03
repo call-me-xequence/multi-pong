@@ -77,7 +77,7 @@ func TestCreateRoomAndWebSocketFlow(t *testing.T) {
 
 	// 1. Create a 2-player room (auto-starts when full).
 	resp, err := http.Post(srv.URL+"/create-room", "application/json",
-		strings.NewReader(`{"maxPlayers":2,"livesCount":1,"ballAccel":false,"addBallTime":0}`))
+		strings.NewReader(`{"name":"testroom","maxPlayers":2,"livesCount":1,"ballAccel":false,"addBallTime":0}`))
 	if err != nil {
 		t.Fatal(err)
 	}

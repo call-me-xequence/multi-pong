@@ -18,6 +18,9 @@ type Player struct {
 
 	// Send is the outbound queue consumed by the player's WebSocket writer goroutine.
 	Send chan []byte
+
+	// Kick is closed when the host kicks this player.
+	Kick chan struct{}
 }
 
 // NewPlayer creates a player with a buffered send queue.
@@ -30,5 +33,6 @@ func NewPlayer(id, name string) *Player {
 		Lives:   0,
 		IsAlive: true,
 		Send:    make(chan []byte, 64),
+		Kick:    make(chan struct{}),
 	}
 }

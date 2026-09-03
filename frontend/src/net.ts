@@ -6,6 +6,7 @@ export interface NetHandlers {
   onWelcome: (w: WelcomeMessage) => void;
   onSnapshot: (s: Snapshot) => void;
   onError: (msg: string) => void;
+  onKicked: () => void;
   onClose: () => void;
 }
 
@@ -18,6 +19,7 @@ export class Net {
   constructor(
     private roomID: string,
     private playerName: string,
+    private password: string,
     private handlers: NetHandlers,
   ) {}
 
@@ -27,7 +29,8 @@ export class Net {
     const url =
       `${proto}://${location.host}/ws` +
       `?roomID=${encodeURIComponent(this.roomID)}` +
-      `&playerName=${encodeURIComponent(this.playerName)}`;
+      `&playerName=${encodeURIComponent(this.playerName)}` +
+      `&password=${encodeURIComponent(this.password)}`;
 
     this.ws = new WebSocket(url);
 
@@ -53,6 +56,9 @@ export class Net {
           this.latencyMs = Math.max(30, Math.min(220, rtt / 2));
           break;
         }
+        case 'kicked':
+          this.handlers.onKicked();
+          break;
       }
     };
 

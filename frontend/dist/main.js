@@ -1,8 +1,9 @@
-// ../frontend/src/net.ts
+// frontend/src/net.ts
 var Net = class {
-  constructor(roomID, playerName, handlers) {
+  constructor(roomID, playerName, password, handlers) {
     this.roomID = roomID;
     this.playerName = playerName;
+    this.password = password;
     this.handlers = handlers;
     this.ws = null;
     this.pingTimer = null;
@@ -12,7 +13,7 @@ var Net = class {
   connect() {
     this.closedByUser = false;
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const url = `${proto}://${location.host}/ws?roomID=${encodeURIComponent(this.roomID)}&playerName=${encodeURIComponent(this.playerName)}`;
+    const url = `${proto}://${location.host}/ws?roomID=${encodeURIComponent(this.roomID)}&playerName=${encodeURIComponent(this.playerName)}&password=${encodeURIComponent(this.password)}`;
     this.ws = new WebSocket(url);
     this.ws.onmessage = (ev) => {
       let m;
@@ -36,6 +37,9 @@ var Net = class {
           this.latencyMs = Math.max(30, Math.min(220, rtt / 2));
           break;
         }
+        case "kicked":
+          this.handlers.onKicked();
+          break;
       }
     };
     this.ws.onclose = () => {
@@ -73,108 +77,7 @@ var Net = class {
   }
 };
 
-// ../frontend/src/physics.ts
-var RENDER_DELAY_MS = 80;
-var LocalPhysics = class {
-  constructor() {
-    this.timeBase = false;
-    this.refServerT = 0;
-    this.refClientNow = 0;
-    this.delayMs = RENDER_DELAY_MS;
-  }
-  sync(snap) {
-    if (!this.timeBase) {
-      this.refServerT = snap.t;
-      this.refClientNow = performance.now();
-      this.timeBase = true;
-    }
-  }
-  /** Server's wall-clock time right now (estimated). */
-  estimatedServerNow() {
-    if (!this.timeBase) return 0;
-    return this.refServerT + (performance.now() - this.refClientNow);
-  }
-  /** Adjust the interpolation delay based on measured network latency. */
-  setDelay(ms) {
-    this.delayMs = Math.max(40, Math.min(300, ms));
-  }
-  /** Server time at which we render: a little in the past to hide network jitter. */
-  get renderTime() {
-    return this.estimatedServerNow() - this.delayMs;
-  }
-};
-var SnapshotBuffer = class {
-  constructor() {
-    this.snaps = [];
-  }
-  push(snap) {
-    this.snaps.push(snap);
-    if (this.snaps.length > 32) this.snaps.shift();
-  }
-  latest() {
-    return this.snaps.length ? this.snaps[this.snaps.length - 1] : null;
-  }
-  /** Finds the two snapshots bracketing `renderTime` and the blend factor f. */
-  bracketing(renderTime) {
-    const n = this.snaps.length;
-    if (n === 0) return null;
-    let a = this.snaps[0];
-    let b = this.snaps[n - 1];
-    for (let i = 0; i < n - 1; i++) {
-      const s0 = this.snaps[i];
-      const s1 = this.snaps[i + 1];
-      if (renderTime >= s0.t && renderTime <= s1.t) {
-        a = s0;
-        b = s1;
-        break;
-      }
-    }
-    const span = b.t - a.t || 1;
-    let f = (renderTime - a.t) / span;
-    if (renderTime > b.t) f = 1;
-    if (renderTime < a.t) f = 0;
-    return [a, b, f];
-  }
-  /** Returns player paddles interpolated to the given server time. */
-  playersAt(renderTime) {
-    const br = this.bracketing(renderTime);
-    if (!br) return null;
-    const [a, b, f] = br;
-    const byId = /* @__PURE__ */ new Map();
-    for (const p of a.players) byId.set(p.id, p);
-    const out = [];
-    for (const pb of b.players) {
-      const pa = byId.get(pb.id);
-      if (!pa) {
-        out.push(pb);
-        continue;
-      }
-      out.push({
-        ...pb,
-        angle: pa.angle + (pb.angle - pa.angle) * f
-      });
-    }
-    return out;
-  }
-  /** Returns balls interpolated to the given server time. */
-  ballsAt(renderTime) {
-    const br = this.bracketing(renderTime);
-    if (!br) return null;
-    const [a, b, f] = br;
-    if (a.balls.length !== b.balls.length) return b.balls;
-    return b.balls.map((bb, i) => {
-      const ba = a.balls[i];
-      return {
-        x: ba.x + (bb.x - ba.x) * f,
-        y: ba.y + (bb.y - ba.y) * f,
-        vx: bb.vx,
-        vy: bb.vy
-      };
-    });
-  }
-};
-
-// ../frontend/src/geometry.ts
+// frontend/src/geometry.ts
 var PI = Math.PI;
 function sub(a, b) {
   return { x: a.x - b.x, y: a.y - b.y };
@@ -184,6 +87,9 @@ function add(a, b) {
 }
 function mul(a, s) {
   return { x: a.x * s, y: a.y * s };
+}
+function dot(a, b) {
+  return a.x * b.x + a.y * b.y;
 }
 function len(a) {
   return Math.hypot(a.x, a.y);
@@ -230,6 +136,18 @@ function pointAlong(from, to, dist) {
 function faceMidAngle(sides, face) {
   return -PI / 2 + (face + 0.5) * (2 * PI / sides);
 }
+function closestPointOnSegment(p, s) {
+  const ab = sub(s.b, s.a);
+  const ap = sub(p, s.a);
+  const lenSq = dot(ab, ab);
+  let t = 0;
+  if (lenSq > 0) {
+    t = dot(ap, ab) / lenSq;
+    if (t < 0) t = 0;
+    else if (t > 1) t = 1;
+  }
+  return add(s.a, mul(ab, t));
+}
 function buildWalls(sides, radius, chamfer) {
   const v = generatePolygon(sides, radius);
   const c = chamferVertices(v, chamfer);
@@ -240,7 +158,171 @@ function buildWalls(sides, radius, chamfer) {
   return walls;
 }
 
-// ../frontend/src/renderer.ts
+// frontend/src/physics.ts
+var RENDER_DELAY_MS = 80;
+var CORRECTION_MS = 100;
+var CORRECTION_THRESHOLD = 20;
+var MAX_FRAME_DT = 0.05;
+var LocalPhysics = class {
+  constructor() {
+    this.walls = [];
+    this.ballRadius = 9;
+    this.balls = [];
+    this.corrections = [];
+    // One-way network latency in seconds; used to align predicted balls with
+    // authoritative snapshots (server state is this far in the past).
+    this.latencySec = 0.06;
+    this.timeBase = false;
+    this.refServerT = 0;
+    this.refClientNow = 0;
+    this.delayMs = RENDER_DELAY_MS;
+  }
+  setup(sides, radius, chamfer, ballRadius) {
+    this.walls = buildWalls(sides, radius, chamfer);
+    this.ballRadius = ballRadius;
+  }
+  /** Establishes the client<->server clock mapping. */
+  sync(snap) {
+    if (!this.timeBase) {
+      this.refServerT = snap.t;
+      this.refClientNow = performance.now();
+      this.timeBase = true;
+    }
+  }
+  /** Server's wall-clock time right now (estimated). */
+  estimatedServerNow() {
+    if (!this.timeBase) return 0;
+    return this.refServerT + (performance.now() - this.refClientNow);
+  }
+  /** Adjust the interpolation delay (for other players' paddles). */
+  setDelay(ms) {
+    this.delayMs = Math.max(40, Math.min(300, ms));
+  }
+  get renderTime() {
+    return this.estimatedServerNow() - this.delayMs;
+  }
+  /** Re-syncs the predicted balls with a fresh authoritative snapshot. */
+  onSnapshot(snap) {
+    while (this.balls.length < snap.balls.length) {
+      const s = snap.balls[this.balls.length];
+      this.balls.push({ x: s.x, y: s.y, vx: s.vx, vy: s.vy });
+      this.corrections.push({ x: 0, y: 0 });
+    }
+    this.balls.length = snap.balls.length;
+    this.corrections.length = snap.balls.length;
+    const lead = Math.max(0, this.latencySec);
+    for (let i = 0; i < snap.balls.length; i++) {
+      const s = snap.balls[i];
+      const b = this.balls[i];
+      const tx = s.x + s.vx * lead;
+      const ty = s.y + s.vy * lead;
+      const ex = tx - b.x;
+      const ey = ty - b.y;
+      const err = Math.hypot(ex, ey);
+      this.corrections[i] = err > CORRECTION_THRESHOLD ? { x: ex, y: ey } : { x: 0, y: 0 };
+      b.vx = s.vx;
+      b.vy = s.vy;
+    }
+  }
+  /** Advances the local ball simulation (called every animation frame). */
+  step(dt) {
+    if (dt <= 0) return;
+    if (dt > MAX_FRAME_DT) dt = MAX_FRAME_DT;
+    for (let i = 0; i < this.balls.length; i++) {
+      const b = this.balls[i];
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      this.collideBall(b);
+      const c = this.corrections[i];
+      const k = Math.min(1, dt * 1e3 / CORRECTION_MS);
+      b.x += c.x * k;
+      b.y += c.y * k;
+      c.x -= c.x * k;
+      c.y -= c.y * k;
+    }
+  }
+  collideBall(b) {
+    for (const seg of this.walls) {
+      const closest = closestPointOnSegment({ x: b.x, y: b.y }, seg);
+      const dx = b.x - closest.x;
+      const dy = b.y - closest.y;
+      const d = Math.hypot(dx, dy);
+      if (d >= this.ballRadius || d === 0) continue;
+      const nx = dx / d;
+      const ny = dy / d;
+      const dotv = b.vx * nx + b.vy * ny;
+      if (dotv < 0) {
+        b.vx -= 2 * dotv * nx;
+        b.vy -= 2 * dotv * ny;
+      }
+      b.x = closest.x + nx * this.ballRadius;
+      b.y = closest.y + ny * this.ballRadius;
+    }
+  }
+  getBalls() {
+    return this.balls;
+  }
+};
+var SnapshotBuffer = class {
+  constructor() {
+    this.snaps = [];
+  }
+  push(snap) {
+    this.snaps.push(snap);
+    if (this.snaps.length > 32) this.snaps.shift();
+  }
+  latest() {
+    return this.snaps.length ? this.snaps[this.snaps.length - 1] : null;
+  }
+  /** Drops all buffered snapshots (e.g. after the arena re-formed). */
+  clear() {
+    this.snaps = [];
+  }
+  /** Finds the two snapshots bracketing `renderTime` and the blend factor f. */
+  bracketing(renderTime) {
+    const n = this.snaps.length;
+    if (n === 0) return null;
+    let a = this.snaps[0];
+    let b = this.snaps[n - 1];
+    for (let i = 0; i < n - 1; i++) {
+      const s0 = this.snaps[i];
+      const s1 = this.snaps[i + 1];
+      if (renderTime >= s0.t && renderTime <= s1.t) {
+        a = s0;
+        b = s1;
+        break;
+      }
+    }
+    const span = b.t - a.t || 1;
+    let f = (renderTime - a.t) / span;
+    if (renderTime > b.t) f = 1;
+    if (renderTime < a.t) f = 0;
+    return [a, b, f];
+  }
+  /** Returns player paddles interpolated to the given server time. */
+  playersAt(renderTime) {
+    const br = this.bracketing(renderTime);
+    if (!br) return null;
+    const [a, b, f] = br;
+    const byId = /* @__PURE__ */ new Map();
+    for (const p of a.players) byId.set(p.id, p);
+    const out = [];
+    for (const pb of b.players) {
+      const pa = byId.get(pb.id);
+      if (!pa) {
+        out.push(pb);
+        continue;
+      }
+      out.push({
+        ...pb,
+        angle: pa.angle + (pb.angle - pa.angle) * f
+      });
+    }
+    return out;
+  }
+};
+
+// frontend/src/renderer.ts
 var PALETTE = ["#00f0ff", "#ff3df0", "#ffe600", "#39ff6a", "#ff7a00", "#9d6bff"];
 function playerColor(index) {
   return PALETTE[(index % PALETTE.length + PALETTE.length) % PALETTE.length];
@@ -298,8 +380,7 @@ var GameRenderer = class {
     bg.addColorStop(1, "#020409");
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, w, h);
-    const faceAngle = faceMidAngle(this.sides, this.myIndex);
-    const camAngle = Math.PI / 2 - faceAngle;
+    const camAngle = this.myIndex >= 0 ? Math.PI / 2 - faceMidAngle(this.sides, this.myIndex) : 0;
     const scale = this.fitScale(w, h);
     const cx = w / 2;
     const cy = h / 2;
@@ -430,7 +511,7 @@ var GameRenderer = class {
   }
 };
 
-// ../frontend/src/ui.ts
+// frontend/src/ui.ts
 function $(id) {
   return document.getElementById(id);
 }
@@ -444,26 +525,70 @@ function showMenuError(msg) {
   box.textContent = msg ?? "";
   box.classList.toggle("hidden", !msg);
 }
-function renderLobby(snap, link) {
-  $("lobby-room-id").textContent = snap.roomID;
-  $("lobby-link").value = link;
-  const list = $("lobby-players");
+function stateLabel(state) {
+  return state === "waiting" ? "\u043E\u0436\u0438\u0434\u0430\u043D\u0438\u0435" : state === "playing" ? "\u0438\u0433\u0440\u0430" : "\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0430";
+}
+function renderRoomList(rooms2, filter, onPick) {
+  const list = $("room-list");
   list.innerHTML = "";
-  snap.players.forEach((p, i) => {
+  const f = filter.trim().toLowerCase();
+  const shown = rooms2.filter((r) => !f || r.roomID.toLowerCase().includes(f));
+  if (shown.length === 0) {
     const li = document.createElement("li");
-    const dot = document.createElement("span");
-    dot.className = "dot";
-    dot.style.background = playerColor(i);
-    dot.style.color = playerColor(i);
+    li.className = "hint";
+    li.textContent = rooms2.length === 0 ? "\u041A\u043E\u043C\u043D\u0430\u0442 \u043F\u043E\u043A\u0430 \u043D\u0435\u0442" : "\u041D\u0438\u0447\u0435\u0433\u043E \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u043E";
+    list.appendChild(li);
+    return;
+  }
+  for (const r of shown) {
+    const li = document.createElement("li");
+    li.className = "room-row";
+    li.tabIndex = 0;
     const name = document.createElement("span");
     name.className = "pname";
-    name.textContent = p.name + (p.isHost ? " \u2605" : "");
-    li.append(dot, name);
+    name.textContent = r.roomID + (r.hasPassword ? " \u{1F512}" : "");
+    const meta = document.createElement("span");
+    meta.className = "hint";
+    meta.textContent = `${r.players}/${r.maxPlayers} \xB7 ${stateLabel(r.state)}`;
+    li.append(name, meta);
+    li.addEventListener("click", () => onPick(r.roomID));
     list.appendChild(li);
+  }
+}
+function renderPlayers(container, snap, isHost, onKick) {
+  container.innerHTML = "";
+  snap.players.forEach((p, i) => {
+    const li = document.createElement("li");
+    const dot2 = document.createElement("span");
+    dot2.className = "dot";
+    dot2.style.background = playerColor(i);
+    dot2.style.color = playerColor(i);
+    const name = document.createElement("span");
+    name.className = "pname";
+    name.textContent = p.name + (p.isHost ? " \u2605" : "") + (!p.isAlive ? " \xB7 \u043D\u0430\u0431\u043B\u044E\u0434\u0430\u0442\u0435\u043B\u044C" : "");
+    li.append(dot2, name);
+    if (isHost && p.id !== snap.you) {
+      const kick = document.createElement("button");
+      kick.className = "btn btn-sm btn-kick";
+      kick.type = "button";
+      kick.textContent = "\u0412\u044B\u0433\u043D\u0430\u0442\u044C";
+      kick.addEventListener("click", () => onKick(p.id));
+      li.appendChild(kick);
+    }
+    container.appendChild(li);
   });
+}
+function renderLobby(snap, link, onKick) {
+  $("lobby-room-id").textContent = snap.roomID;
+  $("lobby-link").value = link;
   const isHost = snap.players.some((p) => p.id === snap.you && p.isHost);
+  renderPlayers($("lobby-players"), snap, isHost, onKick);
   $("btn-start").classList.toggle("hidden", !isHost);
   $("lobby-status").textContent = isHost ? "\u0412\u044B \u0441\u043E\u0437\u0434\u0430\u0442\u0435\u043B\u044C \u2014 \u043D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u041D\u0430\u0447\u0430\u0442\u044C \u0438\u0433\u0440\u0443\xBB, \u043A\u043E\u0433\u0434\u0430 \u0432\u0441\u0435 \u0433\u043E\u0442\u043E\u0432\u044B." : "\u041E\u0436\u0438\u0434\u0430\u043D\u0438\u0435 \u0437\u0430\u043F\u0443\u0441\u043A\u0430 \u0441\u043E\u0437\u0434\u0430\u0442\u0435\u043B\u0435\u043C...";
+}
+function renderGameOverPlayers(snap, onKick) {
+  const isHost = snap.players.some((p) => p.id === snap.you && p.isHost);
+  renderPlayers($("game-over-kick-list"), snap, isHost, onKick);
 }
 function renderHUD(snap, elapsedSec) {
   const wrap = $("hud-players");
@@ -471,16 +596,16 @@ function renderHUD(snap, elapsedSec) {
   for (const p of snap.players) {
     const item = document.createElement("div");
     item.className = "hud-player" + (p.isAlive ? "" : " dead");
-    const dot = document.createElement("span");
-    dot.className = "dot";
-    dot.style.background = playerColor(p.index);
-    dot.style.color = playerColor(p.index);
+    const dot2 = document.createElement("span");
+    dot2.className = "dot";
+    dot2.style.background = playerColor(Math.max(0, p.index));
+    dot2.style.color = playerColor(Math.max(0, p.index));
     const name = document.createElement("span");
     name.textContent = p.name;
     const lives = document.createElement("span");
     lives.className = "lives";
     lives.textContent = p.isAlive ? "\u2665".repeat(Math.max(0, p.lives)) : "\u2715";
-    item.append(dot, name, lives);
+    item.append(dot2, name, lives);
     wrap.appendChild(item);
   }
   const m = Math.floor(elapsedSec / 60);
@@ -494,7 +619,7 @@ function showToast(msg, ms = 3e3) {
   window.setTimeout(() => t.classList.add("hidden"), ms);
 }
 
-// ../frontend/src/main.ts
+// frontend/src/main.ts
 var NAME_KEY = "neonpong.name";
 var net = null;
 var renderer = null;
@@ -508,6 +633,8 @@ var inputDir = 0;
 var inputSeq = 0;
 var serverLastSeq = 0;
 var frameCounter = 0;
+var currentSides = 0;
+var currentMyIndex = -1;
 var wasAlive = true;
 var playing = false;
 var rafId = 0;
@@ -517,15 +644,21 @@ var lastFrameTime = 0;
 var lastLoopTick = 0;
 var matchStartTime = 0;
 var keys = { left: false, right: false };
+var rooms = [];
+var lastLobbySig = "";
+var lastGameOverSig = "";
+var gameOverInitDone = false;
 function init() {
   const nameInput = $("player-name");
   const saved = localStorage.getItem(NAME_KEY);
   if (saved) nameInput.value = saved;
   const roomParam = new URLSearchParams(location.search).get("room");
-  if (roomParam) $("join-room-id").value = roomParam;
+  if (roomParam) $("join-room-name").value = roomParam;
   bindCreatePanel();
   bindButtons();
   bindKeys();
+  refreshRooms();
+  window.setInterval(refreshRooms, 5e3);
   showScreen("menu");
 }
 function bindCreatePanel() {
@@ -539,6 +672,28 @@ function bindCreatePanel() {
   };
   ball.addEventListener("input", ballLabel);
   ballLabel();
+  const goLives = $("go-lives");
+  const goAccel = $("go-accel");
+  const goBall = $("go-ball");
+  const goBallLabel = () => {
+    $("go-ball-val").textContent = Number(goBall.value) === 0 ? "\u0432\u044B\u043A\u043B" : `${goBall.value} \u0441\u0435\u043A`;
+  };
+  goLives.addEventListener("input", () => {
+    $("go-lives-val").textContent = goLives.value;
+    sendConfig();
+  });
+  goAccel.addEventListener("change", sendConfig);
+  goBall.addEventListener("input", () => {
+    goBallLabel();
+    sendConfig();
+  });
+  goBallLabel();
+}
+function sendConfig() {
+  const lives = Number($("go-lives").value);
+  const accel = $("go-accel").checked;
+  const ball = Number($("go-ball").value);
+  net?.send({ action: "config", lives, ballAccel: accel, addBallTime: ball });
 }
 function bindButtons() {
   $("btn-create").addEventListener("click", () => {
@@ -546,6 +701,8 @@ function bindButtons() {
   });
   $("btn-create-go").addEventListener("click", createRoom);
   $("btn-join").addEventListener("click", joinRoom);
+  $("btn-refresh-rooms").addEventListener("click", refreshRooms);
+  $("room-filter").addEventListener("input", renderRooms);
   $("btn-copy").addEventListener("click", async () => {
     const link = $("lobby-link");
     try {
@@ -564,8 +721,14 @@ function bindButtons() {
   });
   $("btn-again").addEventListener("click", leaveToMenu);
 }
+function isTypingTarget(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable;
+}
 function bindKeys() {
   window.addEventListener("keydown", (e) => {
+    if (isTypingTarget(e.target)) return;
     switch (e.code) {
       case "ArrowLeft":
       case "KeyA":
@@ -580,6 +743,7 @@ function bindKeys() {
     }
   });
   window.addEventListener("keyup", (e) => {
+    if (isTypingTarget(e.target)) return;
     switch (e.code) {
       case "ArrowLeft":
       case "KeyA":
@@ -594,6 +758,8 @@ function bindKeys() {
 }
 function setKey(which, down) {
   keys[which] = down;
+  const me = latestSnap?.players.find((p) => p.id === meID);
+  if (me && !me.isAlive) return;
   const dir = (keys.right ? 1 : 0) + (keys.left ? -1 : 0);
   if (dir !== inputDir) {
     inputDir = dir;
@@ -608,37 +774,54 @@ function getPlayerName() {
 }
 async function createRoom() {
   showMenuError(null);
+  const name = $("inp-room-name").value.trim();
+  const pass = $("inp-room-pass").value;
   const max = Number($("inp-max").value);
   const lives = Number($("inp-lives").value);
   const accel = $("inp-accel").checked;
   const ball = Number($("inp-ball").value);
+  if (!name) {
+    showMenuError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043A\u043E\u043C\u043D\u0430\u0442\u044B");
+    return;
+  }
   try {
     const res = await fetch("/create-room", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ maxPlayers: max, livesCount: lives, ballAccel: accel, addBallTime: ball })
+      body: JSON.stringify({
+        name,
+        password: pass,
+        maxPlayers: max,
+        livesCount: lives,
+        ballAccel: accel,
+        addBallTime: ball
+      })
     });
-    if (!res.ok) throw new Error("bad status");
     const data = await res.json();
-    connect(data.roomID);
+    if (!res.ok) {
+      showMenuError(data.error || "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043E\u0437\u0434\u0430\u0442\u044C \u043A\u043E\u043C\u043D\u0430\u0442\u0443");
+      return;
+    }
+    connect(data.roomID, pass);
   } catch {
     showMenuError("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043E\u0437\u0434\u0430\u0442\u044C \u043A\u043E\u043C\u043D\u0430\u0442\u0443. \u0421\u0435\u0440\u0432\u0435\u0440 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D?");
   }
 }
 function joinRoom() {
-  const id = $("join-room-id").value.trim();
-  if (!id) {
-    showMenuError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 ID \u043A\u043E\u043C\u043D\u0430\u0442\u044B");
+  const name = $("join-room-name").value.trim();
+  const pass = $("join-room-pass").value;
+  if (!name) {
+    showMenuError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043A\u043E\u043C\u043D\u0430\u0442\u044B");
     return;
   }
-  connect(id);
+  connect(name, pass);
 }
-function connect(roomID) {
+function connect(roomID, password = "") {
   const name = getPlayerName();
   localStorage.setItem(NAME_KEY, name);
   showMenuError(null);
   net?.close();
-  net = new Net(roomID, name, {
+  net = new Net(roomID, name, password, {
     onWelcome: (w) => {
       meID = w.you;
     },
@@ -647,6 +830,13 @@ function connect(roomID) {
       net?.close();
       showScreen("menu");
       showMenuError(m);
+      refreshRooms();
+    },
+    onKicked: () => {
+      net?.close();
+      showScreen("menu");
+      showMenuError("\u0412\u044B \u0431\u044B\u043B\u0438 \u0438\u0441\u043A\u043B\u044E\u0447\u0435\u043D\u044B \u0438\u0437 \u043A\u043E\u043C\u043D\u0430\u0442\u044B");
+      refreshRooms();
     },
     onClose: () => {
       if (playing) stopLoop();
@@ -658,15 +848,43 @@ function connect(roomID) {
   showScreen("lobby");
   $("lobby-status").textContent = "\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435...";
 }
+function kickPlayer(id) {
+  net?.send({ action: "kick", target: id });
+}
+function playersSignature(snap) {
+  return snap.players.map((p) => `${p.id}:${p.isHost}:${p.isAlive}`).join("|");
+}
+async function refreshRooms() {
+  try {
+    const res = await fetch("/rooms");
+    if (!res.ok) return;
+    const data = await res.json();
+    rooms = data.rooms || [];
+    renderRooms();
+  } catch {
+  }
+}
+function renderRooms() {
+  const filter = $("room-filter").value;
+  renderRoomList(rooms, filter, (name) => {
+    $("join-room-name").value = name;
+    $("join-room-pass").focus();
+  });
+}
 function handleSnapshot(snap) {
   latestSnap = snap;
   buffer.push(snap);
   physics.sync(snap);
+  physics.onSnapshot(snap);
   const me = snap.players.find((p) => p.id === snap.you);
   if (snap.state === "waiting") {
     playing = false;
     showScreen("lobby");
-    renderLobby(snap, buildInviteLink(snap.roomID));
+    const sig = playersSignature(snap);
+    if (sig !== lastLobbySig) {
+      lastLobbySig = sig;
+      renderLobby(snap, buildInviteLink(snap.roomID), kickPlayer);
+    }
   } else if (snap.state === "playing") {
     if (me) {
       serverMyAngle = me.angle;
@@ -674,27 +892,43 @@ function handleSnapshot(snap) {
     }
     if (!playing) {
       startPlaying(snap);
-    } else if (me && !me.isAlive && wasAlive) {
-      showToast("\u0412\u044B \u0432\u044B\u0431\u044B\u043B\u0438 \u0438\u0437 \u043C\u0430\u0442\u0447\u0430");
+    } else {
+      if (me && !me.isAlive && wasAlive) {
+        showToast("\u0412\u044B \u0432\u044B\u0431\u044B\u043B\u0438 \u2014 \u0442\u0435\u043F\u0435\u0440\u044C \u0432\u044B \u043D\u0430\u0431\u043B\u044E\u0434\u0430\u0442\u0435\u043B\u044C");
+      }
+      if (me) wasAlive = me.isAlive;
+      const myIdx = me && me.isAlive ? me.index : -1;
+      if (snap.sides !== currentSides || myIdx !== currentMyIndex) {
+        buffer.clear();
+        buffer.push(snap);
+        setupField(snap);
+      }
     }
-    if (me) wasAlive = me.isAlive;
   } else if (snap.state === "ended") {
     showGameOver(snap);
   }
+}
+function setupField(snap) {
+  const me = snap.players.find((p) => p.id === snap.you);
+  const myIndex = me && me.isAlive ? me.index : -1;
+  if (!renderer) renderer = new GameRenderer($("game-canvas"));
+  renderer.resize();
+  renderer.setup(snap.sides, snap.radius, snap.chamfer, snap.paddleHalf, snap.ballRadius, myIndex);
+  physics.setup(snap.sides, snap.radius, snap.chamfer, snap.ballRadius);
+  currentSides = snap.sides;
+  currentMyIndex = myIndex;
 }
 function startPlaying(snap) {
   playing = true;
   wasAlive = true;
   matchStartTime = performance.now();
+  gameOverInitDone = false;
   const me = snap.players.find((p) => p.id === snap.you);
-  const myIndex = me ? me.index : 0;
   myAngle = me ? me.angle : 0.5;
   serverMyAngle = myAngle;
   $("game-over").classList.add("hidden");
   showScreen("game");
-  if (!renderer) renderer = new GameRenderer($("game-canvas"));
-  renderer.resize();
-  renderer.setup(snap.sides, snap.radius, snap.chamfer, snap.paddleHalf, snap.ballRadius, myIndex);
+  setupField(snap);
   if (!rafId && intervalId === null) {
     lastFrameTime = performance.now();
     startLoop();
@@ -729,18 +963,19 @@ function frame(now) {
   frameCounter++;
   if (frameCounter % 30 === 0) {
     const latency = net ? net.getLatency() : 60;
+    physics.latencySec = latency / 1e3;
     physics.setDelay(Math.round(latency) + 50);
   }
+  physics.step(dt);
   stepMyPaddle(dt);
   if (renderer && latestSnap) {
     const renderTime = physics.renderTime;
     const players = buffer.playersAt(renderTime) ?? latestSnap.players;
-    const balls = buffer.ballsAt(renderTime) ?? [];
     renderer.render({
       snap: latestSnap,
       players,
       myAngle,
-      balls
+      balls: physics.getBalls()
     });
     renderHUD(latestSnap, (now - matchStartTime) / 1e3);
   }
@@ -767,12 +1002,11 @@ function showGameOver(snap) {
   if (renderer && latestSnap) {
     const renderTime = physics.renderTime;
     const players = buffer.playersAt(renderTime) ?? latestSnap.players;
-    const balls = buffer.ballsAt(renderTime) ?? [];
     renderer.render({
       snap: latestSnap,
       players,
       myAngle,
-      balls
+      balls: physics.getBalls()
     });
   }
   const winner = snap.players.find((p) => p.id === snap.winner);
@@ -781,10 +1015,28 @@ function showGameOver(snap) {
   else if (winner.id === meID) text = "\u{1F3C6} \u0412\u044B \u043F\u043E\u0431\u0435\u0434\u0438\u043B\u0438!";
   else text = `\u041F\u043E\u0431\u0435\u0434\u0438\u043B: ${winner.name}`;
   $("game-over-text").textContent = text;
+  renderHUD(snap, (performance.now() - matchStartTime) / 1e3);
   const me = snap.players.find((p) => p.id === snap.you);
   const isHost = !!me?.isHost;
   $("btn-restart").classList.toggle("hidden", !isHost);
-  $("game-over-players").textContent = isHost ? `\u0418\u0433\u0440\u043E\u043A\u043E\u0432 \u0432 \u043A\u043E\u043C\u043D\u0430\u0442\u0435: ${snap.players.length} \u2014 \u043D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u0418\u0433\u0440\u0430\u0442\u044C \u0441\u043D\u043E\u0432\u0430\xBB` : "\u041E\u0436\u0438\u0434\u0430\u043D\u0438\u0435 \u043F\u0435\u0440\u0435\u0437\u0430\u043F\u0443\u0441\u043A\u0430 \u0441\u043E\u0437\u0434\u0430\u0442\u0435\u043B\u0435\u043C...";
+  $("game-over-config").classList.toggle("hidden", !isHost);
+  $("game-over-players").textContent = isHost ? `\u0418\u0433\u0440\u043E\u043A\u043E\u0432 \u0432 \u043A\u043E\u043C\u043D\u0430\u0442\u0435: ${snap.players.length} \u2014 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u0442\u0435 \u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0438 \u043D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u0418\u0433\u0440\u0430\u0442\u044C \u0441\u043D\u043E\u0432\u0430\xBB` : "\u041E\u0436\u0438\u0434\u0430\u043D\u0438\u0435 \u043F\u0435\u0440\u0435\u0437\u0430\u043F\u0443\u0441\u043A\u0430 \u0441\u043E\u0437\u0434\u0430\u0442\u0435\u043B\u0435\u043C...";
+  if (!gameOverInitDone) {
+    gameOverInitDone = true;
+    const lives = snap.lives ?? 3;
+    const accel = snap.ballAccel ?? true;
+    const ball = snap.addBallTime ?? 15;
+    $("go-lives").value = String(lives);
+    $("go-lives-val").textContent = String(lives);
+    $("go-accel").checked = accel;
+    $("go-ball").value = String(ball);
+    $("go-ball-val").textContent = ball === 0 ? "\u0432\u044B\u043A\u043B" : `${ball} \u0441\u0435\u043A`;
+  }
+  const sig = playersSignature(snap);
+  if (sig !== lastGameOverSig) {
+    lastGameOverSig = sig;
+    renderGameOverPlayers(snap, kickPlayer);
+  }
   $("game-over").classList.remove("hidden");
 }
 function stopLoop() {
@@ -805,6 +1057,10 @@ function leaveToMenu() {
   latestSnap = null;
   keys.left = keys.right = false;
   inputDir = 0;
+  lastLobbySig = "";
+  lastGameOverSig = "";
+  gameOverInitDone = false;
+  refreshRooms();
   showScreen("menu");
 }
 function buildInviteLink(roomID) {

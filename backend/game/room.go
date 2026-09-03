@@ -28,6 +28,7 @@ type Room struct {
 	State      string
 	HostID     string
 	WinnerID   string
+	Password   string
 	CreatedAt  time.Time
 
 	// Geometry (built at Start).
@@ -83,6 +84,35 @@ func (r *Room) Info() (id string, players, maxPlayers int, state string) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.ID, len(r.Players), r.MaxPlayers, r.State
+}
+
+// RoomSummary is a public, JSON-friendly description of a room.
+type RoomSummary struct {
+	RoomID      string `json:"roomID"`
+	Players     int    `json:"players"`
+	MaxPlayers  int    `json:"maxPlayers"`
+	State       string `json:"state"`
+	HasPassword bool   `json:"hasPassword"`
+}
+
+// Summary returns a snapshot of the room for the public room list.
+func (r *Room) Summary() RoomSummary {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return RoomSummary{
+		RoomID:      r.ID,
+		Players:     len(r.Players),
+		MaxPlayers:  r.MaxPlayers,
+		State:       r.State,
+		HasPassword: r.Password != "",
+	}
+}
+
+// CheckPassword reports whether the given password grants access to the room.
+func (r *Room) CheckPassword(password string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.Password == "" || r.Password == password
 }
 
 // AddPlayer adds a new player. Joining is allowed while waiting or after the
@@ -152,6 +182,39 @@ func (r *Room) RemovePlayer(id string) {
 	r.eliminateLocked(id)
 }
 
+// Kick removes a player from the room (host only). In a running match the
+// kicked player is treated as eliminated so the field re-forms.
+func (r *Room) Kick(hostID, targetID string) (*Player, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.HostID != hostID {
+		return nil, ErrNotHost
+	}
+	if hostID == targetID {
+		return nil, ErrCannotKickSelf
+	}
+	idx := -1
+	for i, p := range r.Players {
+		if p.ID == targetID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return nil, ErrPlayerNotFound
+	}
+
+	target := r.Players[idx]
+	r.Players = append(r.Players[:idx], r.Players[idx+1:]...)
+
+	if r.State == StatePlaying {
+		r.onEliminationLocked()
+		r.checkEndLocked()
+	}
+	return target, nil
+}
+
 // SetInput records the currently held movement direction for a player. seq is
 // the client's input sequence number, echoed back in snapshots so the client
 // can reconcile its local prediction.
@@ -193,6 +256,40 @@ func (r *Room) Start(hostID string) error {
 		return ErrNotEnoughPlayers
 	}
 	r.startLocked()
+	return nil
+}
+
+// UpdateConfig changes the room's match settings (host only, outside a running
+// match). Used before the first start and for a rematch.
+func (r *Room) UpdateConfig(hostID string, lives int, accel bool, addBallTime int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.HostID != hostID {
+		return ErrNotHost
+	}
+	if r.State != StateWaiting && r.State != StateEnded {
+		return ErrGameStarted
+	}
+	if lives < 1 {
+		lives = 1
+	}
+	if lives > 5 {
+		lives = 5
+	}
+	if addBallTime < 0 {
+		addBallTime = 0
+	}
+	if addBallTime > 30 {
+		addBallTime = 30
+	}
+	r.Config.Lives = lives
+	r.Config.BallAccel = accel
+	if addBallTime > 0 {
+		r.Config.AddBallInterval = float64(addBallTime)
+	} else {
+		r.Config.AddBallInterval = 0
+	}
 	return nil
 }
 
@@ -459,6 +556,9 @@ type snapshot struct {
 	BallRadius  float64          `json:"ballRadius"`
 	BallSpeed   float64          `json:"ballSpeed"`
 	RespawnIn   float64          `json:"respawnIn"`
+	Lives       int              `json:"lives"`
+	BallAccel   bool             `json:"ballAccel"`
+	AddBallTime int              `json:"addBallTime"`
 	Players     []snapshotPlayer `json:"players"`
 	Balls       []snapshotBall   `json:"balls"`
 }
@@ -484,6 +584,9 @@ func (r *Room) SnapshotJSON(youID string) []byte {
 		BallRadius:  r.Config.BallRadius,
 		BallSpeed:   r.currentBallSpeed,
 		RespawnIn:   r.respawnInLocked(now),
+		Lives:       r.Config.Lives,
+		BallAccel:   r.Config.BallAccel,
+		AddBallTime: int(r.Config.AddBallInterval),
 		Players:     make([]snapshotPlayer, 0, len(r.Players)),
 		Balls:       make([]snapshotBall, 0, len(r.Balls)),
 	}

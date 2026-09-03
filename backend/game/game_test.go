@@ -433,3 +433,41 @@ func TestFieldReformsOnElimination(t *testing.T) {
 		t.Fatalf("expected ended, got %s", r.State)
 	}
 }
+
+func TestKickAndUpdateConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	r := NewRoom("k", cfg, 3)
+	if _, err := r.AddPlayer("a", "A"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.AddPlayer("b", "B"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Kick a player (host "a").
+	if _, err := r.Kick("a", "b"); err != nil {
+		t.Fatalf("kick: %v", err)
+	}
+	if len(r.Players) != 1 {
+		t.Fatalf("expected 1 player after kick, got %d", len(r.Players))
+	}
+	// Non-host cannot kick; host cannot kick self.
+	if _, err := r.Kick("b", "a"); err == nil {
+		t.Fatal("non-host kick should fail")
+	}
+	if _, err := r.Kick("a", "a"); err == nil {
+		t.Fatal("kick self should fail")
+	}
+
+	// Host updates match settings.
+	if err := r.UpdateConfig("a", 4, true, 20); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+	if r.Config.Lives != 4 || !r.Config.BallAccel || r.Config.AddBallInterval != 20 {
+		t.Fatalf("config not applied: %+v", r.Config)
+	}
+	// Non-host cannot update config.
+	if err := r.UpdateConfig("b", 1, false, 0); err == nil {
+		t.Fatal("non-host config update should fail")
+	}
+}

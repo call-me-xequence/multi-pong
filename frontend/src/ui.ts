@@ -1,6 +1,6 @@
-// ui.ts — small DOM helpers shared across screens.
+// ui.ts — DOM helpers shared across screens.
 
-import type { Snapshot } from './types.js';
+import type { Snapshot, RoomInfo } from './types.js';
 import { playerColor } from './renderer.js';
 
 export function $(id: string): HTMLElement {
@@ -19,12 +19,54 @@ export function showMenuError(msg: string | null): void {
   box.classList.toggle('hidden', !msg);
 }
 
-export function renderLobby(snap: Snapshot, link: string): void {
-  $('lobby-room-id').textContent = snap.roomID;
-  ($('lobby-link') as HTMLInputElement).value = link;
+function stateLabel(state: string): string {
+  return state === 'waiting' ? 'ожидание' : state === 'playing' ? 'игра' : 'завершена';
+}
 
-  const list = $('lobby-players');
+export function renderRoomList(
+  rooms: RoomInfo[],
+  filter: string,
+  onPick: (name: string) => void,
+): void {
+  const list = $('room-list');
   list.innerHTML = '';
+  const f = filter.trim().toLowerCase();
+  const shown = rooms.filter((r) => !f || r.roomID.toLowerCase().includes(f));
+
+  if (shown.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'hint';
+    li.textContent = rooms.length === 0 ? 'Комнат пока нет' : 'Ничего не найдено';
+    list.appendChild(li);
+    return;
+  }
+
+  for (const r of shown) {
+    const li = document.createElement('li');
+    li.className = 'room-row';
+    li.tabIndex = 0;
+
+    const name = document.createElement('span');
+    name.className = 'pname';
+    name.textContent = r.roomID + (r.hasPassword ? ' 🔒' : '');
+
+    const meta = document.createElement('span');
+    meta.className = 'hint';
+    meta.textContent = `${r.players}/${r.maxPlayers} · ${stateLabel(r.state)}`;
+
+    li.append(name, meta);
+    li.addEventListener('click', () => onPick(r.roomID));
+    list.appendChild(li);
+  }
+}
+
+function renderPlayers(
+  container: HTMLElement,
+  snap: Snapshot,
+  isHost: boolean,
+  onKick: (id: string) => void,
+): void {
+  container.innerHTML = '';
   snap.players.forEach((p, i) => {
     const li = document.createElement('li');
 
@@ -35,17 +77,40 @@ export function renderLobby(snap: Snapshot, link: string): void {
 
     const name = document.createElement('span');
     name.className = 'pname';
-    name.textContent = p.name + (p.isHost ? ' ★' : '');
+    name.textContent =
+      p.name + (p.isHost ? ' ★' : '') + (!p.isAlive ? ' · наблюдатель' : '');
 
     li.append(dot, name);
-    list.appendChild(li);
+
+    if (isHost && p.id !== snap.you) {
+      const kick = document.createElement('button');
+      kick.className = 'btn btn-sm btn-kick';
+      kick.type = 'button';
+      kick.textContent = 'Выгнать';
+      kick.addEventListener('click', () => onKick(p.id));
+      li.appendChild(kick);
+    }
+
+    container.appendChild(li);
   });
+}
+
+export function renderLobby(snap: Snapshot, link: string, onKick: (id: string) => void): void {
+  $('lobby-room-id').textContent = snap.roomID;
+  ($('lobby-link') as HTMLInputElement).value = link;
 
   const isHost = snap.players.some((p) => p.id === snap.you && p.isHost);
+  renderPlayers($('lobby-players'), snap, isHost, onKick);
+
   $('btn-start').classList.toggle('hidden', !isHost);
   $('lobby-status').textContent = isHost
     ? 'Вы создатель — нажмите «Начать игру», когда все готовы.'
     : 'Ожидание запуска создателем...';
+}
+
+export function renderGameOverPlayers(snap: Snapshot, onKick: (id: string) => void): void {
+  const isHost = snap.players.some((p) => p.id === snap.you && p.isHost);
+  renderPlayers($('game-over-kick-list'), snap, isHost, onKick);
 }
 
 export function renderHUD(snap: Snapshot, elapsedSec: number): void {
@@ -57,8 +122,8 @@ export function renderHUD(snap: Snapshot, elapsedSec: number): void {
 
     const dot = document.createElement('span');
     dot.className = 'dot';
-    dot.style.background = playerColor(p.index);
-    dot.style.color = playerColor(p.index);
+    dot.style.background = playerColor(Math.max(0, p.index));
+    dot.style.color = playerColor(Math.max(0, p.index));
 
     const name = document.createElement('span');
     name.textContent = p.name;

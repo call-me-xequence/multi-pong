@@ -9,10 +9,12 @@ import (
 )
 
 type createRoomRequest struct {
-	MaxPlayers  int  `json:"maxPlayers"`
-	LivesCount  int  `json:"livesCount"`
-	BallAccel   bool `json:"ballAccel"`
-	AddBallTime int  `json:"addBallTime"` // seconds, 0 = disabled
+	Name        string `json:"name"`
+	Password    string `json:"password"`
+	MaxPlayers  int    `json:"maxPlayers"`
+	LivesCount  int    `json:"livesCount"`
+	BallAccel   bool   `json:"ballAccel"`
+	AddBallTime int    `json:"addBallTime"` // seconds, 0 = disabled
 }
 
 // CreateRoomHandler handles POST /create-room.
@@ -51,27 +53,29 @@ func (h *Hub) CreateRoomHandler(c *gin.Context) {
 		cfg.AddBallInterval = 0
 	}
 
-	room := h.CreateRoom(cfg, req.MaxPlayers)
+	room, err := h.CreateRoom(req.Name, req.Password, cfg, req.MaxPlayers)
+	if err != nil {
+		status := http.StatusConflict
+		if err == game.ErrInvalidName {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"roomID":     room.ID,
-		"maxPlayers": req.MaxPlayers,
-		"lives":      req.LivesCount,
+		"roomID":      room.ID,
+		"maxPlayers":  req.MaxPlayers,
+		"lives":       req.LivesCount,
+		"hasPassword": room.Password != "",
 	})
 }
 
 // ListRoomsHandler handles GET /rooms.
 func (h *Hub) ListRoomsHandler(c *gin.Context) {
 	rooms := h.ListRooms()
-	type roomInfo struct {
-		RoomID     string `json:"roomID"`
-		Players    int    `json:"players"`
-		MaxPlayers int    `json:"maxPlayers"`
-		State      string `json:"state"`
-	}
-	list := make([]roomInfo, 0, len(rooms))
+	list := make([]game.RoomSummary, 0, len(rooms))
 	for _, r := range rooms {
-		id, players, maxPlayers, state := r.Info()
-		list = append(list, roomInfo{RoomID: id, Players: players, MaxPlayers: maxPlayers, State: state})
+		list = append(list, r.Summary())
 	}
 	c.JSON(http.StatusOK, gin.H{"rooms": list})
 }

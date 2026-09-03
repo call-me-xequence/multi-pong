@@ -19,7 +19,8 @@
           <input id="player-name" type="text" maxlength="16" placeholder="Player" />
 
           <div class="row">
-            <input id="join-room-id" type="text" maxlength="16" placeholder="ID комнаты" />
+            <input id="join-room-name" type="text" maxlength="32" placeholder="Название комнаты" />
+            <input id="join-room-pass" type="password" maxlength="32" placeholder="Пароль" />
             <button id="btn-join" class="btn">Войти</button>
           </div>
 
@@ -28,6 +29,8 @@
           <button id="btn-create" class="btn btn-accent">Создать комнату</button>
 
           <div id="create-panel" class="create-panel hidden">
+            <input id="inp-room-name" type="text" maxlength="32" placeholder="Название комнаты" />
+            <input id="inp-room-pass" type="password" maxlength="32" placeholder="Пароль (необязательно)" />
             <div class="field">
               <label>Игроков: <b id="val-max">4</b></label>
               <input id="inp-max" type="range" min="2" max="6" step="1" value="4" />
@@ -46,6 +49,15 @@
             </div>
             <button id="btn-create-go" class="btn btn-accent">Создать</button>
           </div>
+        </div>
+
+        <div class="card room-list-card">
+          <div class="room-list-head">
+            <h3>Список комнат</h3>
+            <button id="btn-refresh-rooms" class="btn btn-sm">Обновить</button>
+          </div>
+          <input id="room-filter" type="text" maxlength="32" placeholder="Поиск комнаты..." />
+          <ul id="room-list" class="player-list"></ul>
         </div>
 
         <div id="menu-error" class="error hidden"></div>
@@ -80,6 +92,24 @@
       <div id="game-over" class="overlay hidden">
         <h2 id="game-over-text">Победа!</h2>
         <p id="game-over-players" class="hint"></p>
+
+        <div id="game-over-config" class="card game-over-config hidden">
+          <div class="field">
+            <label>Кол-во жизней: <b id="go-lives-val">3</b></label>
+            <input id="go-lives" type="range" min="1" max="5" step="1" value="3" />
+          </div>
+          <div class="field field-inline">
+            <label for="go-accel">Ускорение мяча</label>
+            <input id="go-accel" type="checkbox" checked />
+          </div>
+          <div class="field">
+            <label>Доп. мячи: <b id="go-ball-val">15 сек</b></label>
+            <input id="go-ball" type="range" min="0" max="30" step="5" value="15" />
+          </div>
+        </div>
+
+        <ul id="game-over-kick-list" class="player-list"></ul>
+
         <div class="row game-over-actions">
           <button id="btn-restart" class="btn btn-accent hidden">Играть снова</button>
           <button id="btn-again" class="btn">В меню</button>

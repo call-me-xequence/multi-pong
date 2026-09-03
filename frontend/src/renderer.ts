@@ -94,9 +94,9 @@ export class GameRenderer {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, w, h);
 
-    // Camera: rotate so that my face is at the bottom.
-    const faceAngle = faceMidAngle(this.sides, this.myIndex);
-    const camAngle = Math.PI / 2 - faceAngle;
+    // Camera: rotate so that my face is at the bottom. Spectators (myIndex < 0)
+    // see the field with its natural orientation.
+    const camAngle = this.myIndex >= 0 ? Math.PI / 2 - faceMidAngle(this.sides, this.myIndex) : 0;
     const scale = this.fitScale(w, h);
     const cx = w / 2;
     const cy = h / 2;

@@ -36,6 +36,9 @@ export interface Snapshot {
   ballRadius: number;
   ballSpeed: number;
   respawnIn?: number; // seconds until the next ball spawns (0 = none pending)
+  lives?: number; // room lives setting (for the host UI)
+  ballAccel?: boolean;
+  addBallTime?: number;
   players: SnapshotPlayer[];
   balls: SnapshotBall[];
 }
@@ -60,7 +63,11 @@ export interface PongMessage {
   t: number; // server time, ms
 }
 
-export type ServerMessage = Snapshot | WelcomeMessage | ErrorMessage | PongMessage;
+export interface KickedMessage {
+  type: 'kicked';
+}
+
+export type ServerMessage = Snapshot | WelcomeMessage | ErrorMessage | PongMessage | KickedMessage;
 
 export interface ClientMoveMessage {
   action: 'move';
@@ -77,4 +84,29 @@ export interface ClientPingMessage {
   c: number;
 }
 
-export type ClientMessage = ClientMoveMessage | ClientStartMessage | ClientPingMessage;
+export interface ClientKickMessage {
+  action: 'kick';
+  target: string;
+}
+
+export interface ClientConfigMessage {
+  action: 'config';
+  lives: number;
+  ballAccel: boolean;
+  addBallTime: number;
+}
+
+export type ClientMessage =
+  | ClientMoveMessage
+  | ClientStartMessage
+  | ClientPingMessage
+  | ClientKickMessage
+  | ClientConfigMessage;
+
+export interface RoomInfo {
+  roomID: string;
+  players: number;
+  maxPlayers: number;
+  state: string;
+  hasPassword: boolean;
+}
