@@ -355,9 +355,11 @@ func (r *Room) applyCurveLocked(b *Ball, dt float64) {
 	b.Curve--
 }
 
-// tickTetherLocked snaps a tethered ball back to its anchor paddle when the
-// rope goes taut (distance > rope length). Only active after the anchor's paddle
-// has touched the ball at least once.
+// tickTetherLocked keeps a tethered ball on its rope. When the rope goes taut
+// (the ball is farther from the anchor paddle than the rope length) the ball is
+// reeled back in by aiming its velocity at the anchor — no instant teleport, so
+// it never visually leaves the field or passes straight through the paddle.
+// Only active after the anchor's paddle has touched the ball at least once.
 func (r *Room) tickTetherLocked(b *Ball) {
 	if b.TetherOwner == "" || b.TetherTarget == "" || b.TetherHits < 1 || b.TetherHits >= tetherMaxHits {
 		return
@@ -385,11 +387,19 @@ func (r *Room) tickTetherLocked(b *Ball) {
 	if d <= ropeLen {
 		return
 	}
-	nx, ny := -dx/d, -dy/d // unit vector back toward the anchor
-	b.X = ac.X + nx*ropeLen*0.9
-	b.Y = ac.Y + ny*ropeLen*0.9
-	b.VX = nx * r.ballSpeed(b)
-	b.VY = ny * r.ballSpeed(b)
+	// Reel the ball back toward the anchor by steering its velocity (the client
+	// predicts this from the velocity, so the motion stays smooth and inside the
+	// arena).
+	ux, uy := -dx/d, -dy/d // unit vector from the ball to the anchor
+	b.VX = ux * r.ballSpeed(b)
+	b.VY = uy * r.ballSpeed(b)
+	// Safety net: if the ball somehow ended up very far out (e.g. the arena was
+	// re-formed by an elimination while the rope was attached), pull it back to
+	// the rope limit so it never lingers outside the walls.
+	if d > ropeLen*2 {
+		b.X = ac.X + ux*ropeLen
+		b.Y = ac.Y + uy*ropeLen
+	}
 }
 
 // removeFakeOutsideZoneLocked deletes fake balls that left their owner's zone.

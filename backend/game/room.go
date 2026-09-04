@@ -471,10 +471,11 @@ func (r *Room) Start(hostID string) error {
 	return nil
 }
 
-// ResetBall respawns every ball from the arena centre (stripping item effects
-// like sticky/tether/fire and cancelling any stuck/pending state). If the arena
-// is empty it spawns a fresh one. Host only, while playing — a manual escape
-// hatch for a ball stuck somewhere unreachable (e.g. wedged between walls).
+// ResetBall ends the current rally like a goal and serves a fresh ball after
+// the standard respawn delay: every ball is dropped (stripping item effects and
+// cancelling any stuck/pending state) and a new one is thrown after
+// RespawnDelay seconds. Host only, while playing — a manual escape hatch for a
+// ball stuck somewhere unreachable (e.g. wedged between walls).
 func (r *Room) ResetBall(hostID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -486,13 +487,14 @@ func (r *Room) ResetBall(hostID string) error {
 		return ErrNotPlaying
 	}
 	r.nextBallAt = time.Time{}
-	if len(r.Balls) == 0 {
-		r.spawnBallLocked(r.randomAliveFaceLocked())
+	for len(r.Balls) > 0 {
+		r.removeBallLocked(r.Balls[0])
+	}
+	if r.Config.RespawnDelay > 0 {
+		// Re-throw after the same pause as a goal.
+		r.nextBallAt = time.Now().Add(time.Duration(r.Config.RespawnDelay * float64(time.Second)))
 	} else {
-		for _, b := range r.Balls {
-			r.clearBallEffectsLocked(b)
-			r.respawnBallLocked(b, -1)
-		}
+		r.spawnBallLocked(r.randomAliveFaceLocked())
 	}
 	return nil
 }

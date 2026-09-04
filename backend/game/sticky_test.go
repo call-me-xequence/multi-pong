@@ -183,7 +183,8 @@ func TestStickyWallReleaseKeepsAngle(t *testing.T) {
 	}
 }
 
-// ResetBall must be host-only, respawn balls from the centre and strip effects.
+// ResetBall must be host-only, end the rally like a goal (balls removed, item
+// effects stripped) and schedule a fresh serve after the respawn delay.
 func TestResetBall(t *testing.T) {
 	r := stickyRoom(t)
 
@@ -205,12 +206,27 @@ func TestResetBall(t *testing.T) {
 	}
 
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	b = r.Balls[0]
-	if math.Hypot(b.X, b.Y) > 1e-6 {
-		t.Fatalf("ball not respawned at the centre: %+v", b)
+	empty := len(r.Balls) == 0
+	pending := !r.nextBallAt.IsZero()
+	r.mu.RUnlock()
+	if !empty {
+		t.Fatal("reset must clear every ball from the arena")
 	}
-	if b.Sticky || b.OnFire || b.StickyUntil.After(time.Now()) {
-		t.Fatalf("item effects not cleared by reset: sticky=%v fire=%v", b.Sticky, b.OnFire)
+	if !pending {
+		t.Fatal("reset must schedule a fresh serve after the respawn delay")
+	}
+
+	// When the serve time arrives the game throws a fresh ball.
+	r.mu.Lock()
+	r.nextBallAt = time.Now().Add(-time.Millisecond)
+	r.mu.Unlock()
+	r.Update(1.0 / 60.0)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if len(r.Balls) == 0 {
+		t.Fatal("no ball served after the reset delay")
+	}
+	if r.Balls[0].Sticky || r.Balls[0].OnFire {
+		t.Fatal("served ball kept item effects")
 	}
 }
