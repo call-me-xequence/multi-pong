@@ -1532,6 +1532,12 @@ function startPlaying(snap) {
   const me = snap.players.find((p) => p.id === snap.you);
   myAngle = me ? me.angle : 0.5;
   serverMyAngle = myAngle;
+  keys.left = keys.right = false;
+  inputDir = 0;
+  if (net) {
+    inputSeq++;
+    net.send({ action: "move", dir: 0, seq: inputSeq, lag: net.getLatency() });
+  }
   $("game-over").classList.add("hidden");
   showScreen("game");
   setupField(snap);

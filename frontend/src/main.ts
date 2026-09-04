@@ -493,6 +493,17 @@ function startPlaying(snap: Snapshot): void {
   myAngle = me ? me.angle : 0.5;
   serverMyAngle = myAngle;
 
+  // A new match starts "hands off": forget any keys/direction held during the
+  // previous one (releasing a key while dead was ignored, so inputDir could be
+  // stale) and tell the server we are idle. Otherwise the server keeps the old
+  // input and the paddle drifts on its own after a rematch.
+  keys.left = keys.right = false;
+  inputDir = 0;
+  if (net) {
+    inputSeq++;
+    net.send({ action: 'move', dir: 0, seq: inputSeq, lag: net.getLatency() });
+  }
+
   // Make the game screen visible BEFORE measuring the canvas, otherwise the
   // canvas backing store ends up 0x0 and nothing is drawn.
   $('game-over').classList.add('hidden');

@@ -541,6 +541,11 @@ func (r *Room) startLocked() {
 		p.Angle = 0.5
 		p.Lives = cfg.Lives
 		p.IsAlive = true
+		// A fresh match starts "hands off": drop any direction the player was
+		// holding in the previous match, otherwise the server keeps moving the
+		// paddle with the old input even though nobody is pressing anything.
+		p.InputDir = 0
+		p.Queue = p.Queue[:0]
 	}
 
 	r.rebuildGeometryLocked()
