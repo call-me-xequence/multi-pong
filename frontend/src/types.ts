@@ -23,6 +23,7 @@ export interface SnapshotPlayer {
   lives: number;
   isAlive: boolean;
   isHost: boolean;
+  isBot?: boolean; // server-controlled bot player
   lastSeq?: number; // last input sequence processed by the server
   item?: string; // held item key ('' = none)
   fx?: Record<string, number>; // effect -> seconds remaining
@@ -116,13 +117,18 @@ export interface ClientUseItemMessage {
   action: 'use_item';
 }
 
+export interface ClientResetBallMessage {
+  action: 'reset_ball'; // host only: respawn the ball from the centre
+}
+
 export type ClientMessage =
   | ClientMoveMessage
   | ClientStartMessage
   | ClientPingMessage
   | ClientKickMessage
   | ClientConfigMessage
-  | ClientUseItemMessage;
+  | ClientUseItemMessage
+  | ClientResetBallMessage;
 
 export interface RoomInfo {
   roomID: string;

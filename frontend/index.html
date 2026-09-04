@@ -15,6 +15,7 @@
         <p class="tagline">Мультиплеерная аркада на выбывание · до 6 игроков</p>
 
         <button id="btn-create" class="btn btn-accent btn-hero" type="button">＋ Создать комнату</button>
+        <button id="btn-bot" class="btn btn-hero" type="button">🤖 Играть с ботом</button>
 
         <div class="card room-list-card">
           <div class="room-list-head">
@@ -47,13 +48,23 @@
           <label class="label" for="create-name">Ваше имя</label>
           <input id="create-name" type="text" maxlength="16" placeholder="Player" />
 
-          <label class="label" for="inp-room-name">Название комнаты</label>
-          <input id="inp-room-name" type="text" maxlength="32" placeholder="Например: Ночной раунд" />
+          <div id="create-room-field">
+            <label class="label" for="inp-room-name">Название комнаты</label>
+            <input id="inp-room-name" type="text" maxlength="32" placeholder="Например: Ночной раунд" />
+          </div>
 
-          <label class="label" for="inp-room-pass">Пароль (необязательно)</label>
-          <input id="inp-room-pass" type="password" maxlength="32" placeholder="Пароль" />
+          <div id="create-pass-field">
+            <label class="label" for="inp-room-pass">Пароль (необязательно)</label>
+            <input id="inp-room-pass" type="password" maxlength="32" placeholder="Пароль" />
+          </div>
 
-          <div class="field">
+          <p id="bot-note" class="hint hidden">
+            Матч 1×1 против сильного бота: отбивает почти всё и сам использует
+            способности, как только они ему выпадают. Жмите <b>Пробел</b>, чтобы
+            применить свою способность.
+          </p>
+
+          <div class="field" id="create-max-field">
             <label>Игроков: <b id="val-max">4</b></label>
             <input id="inp-max" type="range" min="2" max="6" step="1" value="4" />
           </div>
@@ -124,6 +135,7 @@
       <div id="hud" class="hud">
         <div id="hud-players" class="hud-players"></div>
         <div id="hud-time" class="hud-time">0:00</div>
+        <button id="btn-reset-ball" class="btn btn-sm btn-reset-ball hidden" type="button" title="Вернуть мяч в центр поля">↺ Мяч</button>
       </div>
       <div id="item-slot" class="item-slot hidden">
         <canvas id="item-slot-canvas" width="64" height="64"></canvas>

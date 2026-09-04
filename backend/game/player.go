@@ -18,6 +18,7 @@ type Player struct {
 	Lives   int     `json:"lives"`
 	IsAlive bool    `json:"isAlive"`
 	IsHost  bool    `json:"isHost"`
+	IsBot   bool    `json:"isBot"` // server-controlled AI player (no socket)
 
 	// InputDir is the currently held movement direction: +1 right, -1 left, 0 idle.
 	InputDir int

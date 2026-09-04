@@ -29,6 +29,9 @@ func (r *Room) simulate(dt float64, timedEvents bool) {
 		return
 	}
 	r.drainInputsLocked()
+	// Decide each bot's held input for this tick before the paddles move, so a
+	// bot paddle reacts within the same tick as the ball it is tracking.
+	r.botThinkLocked()
 
 	cfg := r.Config
 	now := time.Now()
@@ -91,27 +94,40 @@ func (r *Room) simulate(dt float64, timedEvents bool) {
 	var goalBalls []*Ball
 	var goalPlayers []*Player
 	for _, b := range r.Balls {
+		// A sticky ball only stays sticky for a short while, then behaves like a
+		// normal ball again (no endless clinging for the rest of the rally).
+		if b.Sticky && !b.StickyUntil.IsZero() && now.After(b.StickyUntil) {
+			b.Sticky = false
+			b.StickyUntil = time.Time{}
+		}
+
 		// Sticky ball handling (stuck to a paddle/wall for a short moment).
 		if !b.StuckUntil.IsZero() {
 			if b.StuckUntil.After(now) {
-				// Still stuck: follow the paddle if it is stuck to one.
+				// Still stuck: follow the paddle it is stuck to. The ball keeps its
+				// offset from the paddle centre, so it rides along as the paddle
+				// moves. A ball stuck to a wall simply stays put.
 				if b.StuckToP != "" {
 					if p := r.playerByID(b.StuckToP); p != nil && p.IsAlive && p.Index >= 0 {
 						seg := r.Faces[p.Index]
 						ab := geometry.Sub(seg.B, seg.A)
 						nn := geometry.Norm(geometry.Mul(geometry.Add(seg.A, seg.B), 0.5))
-						pos := geometry.Add(seg.A, geometry.Mul(ab, b.StuckT))
+						coord := p.Angle + b.StuckT
+						if coord < 0 {
+							coord = 0
+						} else if coord > 1 {
+							coord = 1
+						}
+						pos := geometry.Add(seg.A, geometry.Mul(ab, coord))
 						b.X = pos.X - nn.X*b.Radius
 						b.Y = pos.Y - nn.Y*b.Radius
 					}
 				}
 				continue
 			}
-			// Stick window over: release outward.
-			b.StuckUntil = time.Time{}
-			b.StuckToP = ""
-			b.VX = b.StuckNX * r.ballSpeed(b)
-			b.VY = b.StuckNY * r.ballSpeed(b)
+			// Stick window over: resume as a normal (delayed) bounce so the ball
+			// can't get locked bouncing perpendicular between parallel walls.
+			r.releaseStuckBallLocked(b)
 			continue
 		}
 
@@ -229,6 +245,7 @@ func (r *Room) handleFace(b *Ball, seg geometry.Segment, p *Player, px, py float
 				// The arming contact of the sticky item sticks to the paddle too.
 				if !b.Sticky {
 					b.Sticky = true
+					b.StickyUntil = time.Now().Add(time.Duration(stickyBallLife * float64(time.Second)))
 					p.StickyArmT = time.Time{}
 				}
 				// Sticky ball clings to the paddle for a moment.
@@ -300,12 +317,20 @@ func (r *Room) collideWall(b *Ball, seg geometry.Segment) {
 
 	nx, ny := dx/d, dy/d
 	if b.Sticky {
-		// Sticky ball clings to the wall for a short moment.
+		// Sticky ball clings to the wall for a short moment, then resumes as a
+		// normal bounce. Remember its incoming direction so the release keeps its
+		// tangential motion: otherwise a sticky ball can end up bouncing straight
+		// back and forth between parallel walls, out of everyone's reach.
 		now := time.Now()
+		spd := math.Hypot(b.VX, b.VY)
+		if spd > 0 {
+			b.StuckNX, b.StuckNY = b.VX/spd, b.VY/spd
+		} else {
+			b.StuckNX, b.StuckNY = nx, ny
+		}
 		b.StuckUntil = now.Add(time.Duration(stickyStickTime * float64(time.Second)))
 		b.StuckToP = ""
 		b.StuckT = 0
-		b.StuckNX, b.StuckNY = nx, ny
 		b.X = closest.X + nx*b.Radius
 		b.Y = closest.Y + ny*b.Radius
 		b.VX, b.VY = 0, 0
@@ -320,6 +345,80 @@ func (r *Room) collideWall(b *Ball, seg geometry.Segment) {
 	// Push the ball out of the wall.
 	b.X = closest.X + nx*b.Radius
 	b.Y = closest.Y + ny*b.Radius
+}
+
+// releaseStuckBallLocked ends a sticky ball's pause and puts it back in motion
+// as a normal (delayed) bounce. A ball caught on a paddle bounces off the
+// paddle's current position (the paddle may have dragged the ball while it was
+// stuck); a ball stuck to a wall reflects its pre-stick direction about the
+// wall, so its tangential motion is preserved and it can never be trapped
+// bouncing perpendicular between parallel walls.
+func (r *Room) releaseStuckBallLocked(b *Ball) {
+	b.StuckUntil = time.Time{}
+	pid := b.StuckToP
+	b.StuckToP = ""
+
+	// The unit direction the ball was flying when it became stuck.
+	dx, dy := b.StuckNX, b.StuckNY
+
+	if pid != "" {
+		if p := r.playerByID(pid); p != nil && p.IsAlive && p.Index >= 0 {
+			seg := r.Faces[p.Index]
+			n := geometry.Norm(geometry.Mul(geometry.Add(seg.A, seg.B), 0.5))
+			half := r.Config.PaddleHalf()
+			if dx == 0 && dy == 0 {
+				// No recorded direction: assume it was heading into the goal so the
+				// paddle bounce sends it back into the field.
+				dx, dy = n.X, n.Y
+			}
+			b.VX, b.VY = dx, dy
+			r.bouncePaddle(b, seg, n, p.Angle+b.StuckT, p.Angle, half)
+			return
+		}
+	}
+
+	// Wall (or the paddle it was stuck to is gone): reflect off the surface it
+	// is resting on; if that fails, head back toward the arena centre.
+	if dx != 0 || dy != 0 {
+		if vx, vy, ok := r.wallReleaseDirLocked(b, dx, dy); ok {
+			b.VX = vx * r.ballSpeed(b)
+			b.VY = vy * r.ballSpeed(b)
+			return
+		}
+	}
+	b.VX, b.VY = r.towardCentreDir(b)
+	b.VX *= r.ballSpeed(b)
+	b.VY *= r.ballSpeed(b)
+}
+
+// wallReleaseDirLocked reflects the unit direction (dx,dy) about the arena wall
+// the ball is currently resting on (the normal points from the wall to the
+// ball). Returns ok=false when no wall is near enough to reflect against.
+func (r *Room) wallReleaseDirLocked(b *Ball, dx, dy float64) (float64, float64, bool) {
+	for _, seg := range r.Walls {
+		closest := geometry.ClosestPointOnSegment(geometry.Point{X: b.X, Y: b.Y}, seg)
+		nx := b.X - closest.X
+		ny := b.Y - closest.Y
+		d := math.Hypot(nx, ny)
+		if d >= b.Radius+1e-6 || d < 1e-9 {
+			continue
+		}
+		nx, ny = nx/d, ny/d
+		dot := dx*nx + dy*ny
+		return dx - 2*dot*nx, dy - 2*dot*ny, true
+	}
+	return 0, 0, false
+}
+
+// towardCentreDir returns a unit vector pointing from the ball back to the
+// arena centre (0,0), used as a safe fallback release direction.
+func (r *Room) towardCentreDir(b *Ball) (float64, float64) {
+	dx, dy := -b.X, -b.Y
+	d := math.Hypot(dx, dy)
+	if d < 1e-9 {
+		return 0, 1
+	}
+	return dx / d, dy / d
 }
 
 // containBallLocked respawns a ball that somehow escaped the arena.

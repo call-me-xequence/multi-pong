@@ -17,10 +17,12 @@ type Ball struct {
 	Curve    int     // >0 while the ball flies along an arc (decays every tick)
 	Sticky   bool    // sticky ball: briefly sticks on any collision
 
+	StickyUntil time.Time // when the Sticky effect wears off (zero = not sticky)
+
 	StuckUntil time.Time // while set the ball is stuck (velocity zero)
 	StuckToP   string    // player id the stuck ball follows ("" = fixed to a wall point)
-	StuckT     float64   // face position (0..1) if stuck to a paddle
-	StuckNX    float64   // release normal while stuck
+	StuckT     float64   // offset from the paddle centre (in face units) if stuck to a paddle
+	StuckNX    float64   // unit direction the ball had when it became stuck (for the delayed bounce)
 	StuckNY    float64
 
 	IsFake    bool   // mirror ball from the Fake ability

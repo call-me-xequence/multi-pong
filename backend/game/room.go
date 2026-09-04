@@ -29,6 +29,7 @@ type Room struct {
 	mu         sync.RWMutex
 	ID         string
 	MaxPlayers int
+	BotCount   int // how many server-controlled bots fill this room (0 = normal room)
 	Config     *GameConfig
 	Players    []*Player
 	Balls      []*Ball
@@ -65,6 +66,7 @@ type ballState struct {
 	OnFire       bool
 	Curve        int
 	Sticky       bool
+	StickyUntil  time.Time
 	StuckUntil   time.Time
 	StuckToP     string
 	StuckT       float64
@@ -190,6 +192,11 @@ func (r *Room) AddPlayer(id, name string) (*Player, error) {
 	}
 	r.Players = append(r.Players, p)
 
+	// In a bot room the bots are filled in behind the (human) host as soon as the
+	// first human connects, so the human is always the host and the match has the
+	// required 2+ players to start.
+	r.ensureBotsLocked()
+
 	// The match does not auto-start when the room fills up: the host starts it
 	// explicitly (Room.Start) so everyone has a chance to get ready.
 	return p, nil
@@ -212,21 +219,30 @@ func (r *Room) RemovePlayer(id string) {
 	}
 	r.Players = append(r.Players[:idx], r.Players[idx+1:]...)
 
-	// Waiting or ended: remove cleanly and transfer the host if needed.
+	// Waiting or ended: remove cleanly and transfer the host if needed. In a bot
+	// room, when the last human leaves the room is torn down (bots go with it).
+	r.cleanupBotsLocked()
 	if r.State != StatePlaying {
 		if len(r.Players) == 0 {
 			r.HostID = ""
 			return
 		}
 		if r.HostID == id {
-			r.Players[0].IsHost = true
-			r.HostID = r.Players[0].ID
+			for _, p := range r.Players {
+				if !p.IsBot {
+					p.IsHost = true
+					r.HostID = p.ID
+					break
+				}
+			}
 		}
 		return
 	}
 
-	// In-game disconnect: eliminate the player.
+	// In-game disconnect: eliminate the player. A bot room whose last human
+	// disconnects is stopped right after.
 	r.eliminateLocked(id)
+	r.cleanupBotsLocked()
 }
 
 // Kick removes a player from the room (host only). In a running match the
@@ -251,6 +267,9 @@ func (r *Room) Kick(hostID, targetID string) (*Player, error) {
 	if idx == -1 {
 		return nil, ErrPlayerNotFound
 	}
+	if r.Players[idx].IsBot {
+		return nil, ErrCannotKickBot
+	}
 
 	target := r.Players[idx]
 	r.Players = append(r.Players[:idx], r.Players[idx+1:]...)
@@ -260,6 +279,7 @@ func (r *Room) Kick(hostID, targetID string) (*Player, error) {
 		r.onEliminationLocked()
 		r.checkEndLocked()
 	}
+	r.cleanupBotsLocked()
 	return target, nil
 }
 
@@ -376,7 +396,8 @@ func (r *Room) pushHistoryLocked() {
 		e.balls = append(e.balls, ballState{
 			X: b.X, Y: b.Y, VX: b.VX, VY: b.VY,
 			SpeedMul: b.SpeedMul, OnFire: b.OnFire, Curve: b.Curve, Sticky: b.Sticky,
-			StuckUntil: b.StuckUntil, StuckToP: b.StuckToP, StuckT: b.StuckT,
+			StickyUntil: b.StickyUntil,
+			StuckUntil:  b.StuckUntil, StuckToP: b.StuckToP, StuckT: b.StuckT,
 			StuckNX: b.StuckNX, StuckNY: b.StuckNY,
 			IsFake: b.IsFake, FakeOwner: b.FakeOwner,
 			TetherOwner: b.TetherOwner, TetherTarget: b.TetherTarget, TetherHits: b.TetherHits,
@@ -411,7 +432,8 @@ func (r *Room) restoreLocked(snap *historyEntry) {
 		r.Balls = append(r.Balls, &Ball{
 			X: bs.X, Y: bs.Y, VX: bs.VX, VY: bs.VY, Radius: r.Config.BallRadius,
 			SpeedMul: bs.SpeedMul, OnFire: bs.OnFire, Curve: bs.Curve, Sticky: bs.Sticky,
-			StuckUntil: bs.StuckUntil, StuckToP: bs.StuckToP, StuckT: bs.StuckT,
+			StickyUntil: bs.StickyUntil,
+			StuckUntil:  bs.StuckUntil, StuckToP: bs.StuckToP, StuckT: bs.StuckT,
 			StuckNX: bs.StuckNX, StuckNY: bs.StuckNY,
 			IsFake: bs.IsFake, FakeOwner: bs.FakeOwner,
 			TetherOwner: bs.TetherOwner, TetherTarget: bs.TetherTarget, TetherHits: bs.TetherHits,
@@ -446,6 +468,32 @@ func (r *Room) Start(hostID string) error {
 		return ErrNotEnoughPlayers
 	}
 	r.startLocked()
+	return nil
+}
+
+// ResetBall respawns every ball from the arena centre (stripping item effects
+// like sticky/tether/fire and cancelling any stuck/pending state). If the arena
+// is empty it spawns a fresh one. Host only, while playing — a manual escape
+// hatch for a ball stuck somewhere unreachable (e.g. wedged between walls).
+func (r *Room) ResetBall(hostID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.HostID != hostID {
+		return ErrNotHost
+	}
+	if r.State != StatePlaying {
+		return ErrNotPlaying
+	}
+	r.nextBallAt = time.Time{}
+	if len(r.Balls) == 0 {
+		r.spawnBallLocked(r.randomAliveFaceLocked())
+	} else {
+		for _, b := range r.Balls {
+			r.clearBallEffectsLocked(b)
+			r.respawnBallLocked(b, -1)
+		}
+	}
 	return nil
 }
 
@@ -741,6 +789,7 @@ type snapshotPlayer struct {
 	Lives   int                `json:"lives"`
 	IsAlive bool               `json:"isAlive"`
 	IsHost  bool               `json:"isHost"`
+	IsBot   bool               `json:"isBot,omitempty"`
 	LastSeq uint32             `json:"lastSeq"`
 	Item    string             `json:"item,omitempty"` // held item ("" = none)
 	Fx      map[string]float64 `json:"fx,omitempty"`   // effect -> seconds left
@@ -830,7 +879,7 @@ func (r *Room) SnapshotJSON(youID string) []byte {
 		s.Players = append(s.Players, snapshotPlayer{
 			ID: p.ID, Name: p.Name, Index: p.Index,
 			Angle: p.Angle, Lives: p.Lives,
-			IsAlive: p.IsAlive, IsHost: p.IsHost,
+			IsAlive: p.IsAlive, IsHost: p.IsHost, IsBot: p.IsBot,
 			LastSeq: p.LastSeq,
 			Item:    itemKey(p.Item),
 			Fx:      fx,
@@ -867,6 +916,9 @@ func (r *Room) Broadcast() {
 	r.mu.RUnlock()
 
 	for _, p := range players {
+		if p.IsBot {
+			continue // bots are server-controlled; nobody reads their socket
+		}
 		data := r.SnapshotJSON(p.ID)
 		select {
 		case p.Send <- data:

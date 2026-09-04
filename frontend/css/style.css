@@ -357,6 +357,22 @@ input[type='checkbox'] {
   padding: 6px 14px;
 }
 
+/* Host-only "reset ball" helper (bottom of the top HUD bar). */
+.btn-reset-ball {
+  position: absolute;
+  top: 62px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  font-size: 13px;
+  padding: 6px 14px;
+  background: rgba(0, 240, 255, 0.08);
+  box-shadow: 0 0 14px rgba(0, 240, 255, 0.12);
+}
+.btn-reset-ball:hover {
+  background: rgba(0, 240, 255, 0.18);
+}
+
 .toast {
   position: absolute;
   top: 50%;

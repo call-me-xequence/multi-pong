@@ -1046,7 +1046,7 @@ function renderPlayers(container, snap, isHost, onKick) {
     name.className = "pname";
     name.textContent = p.name + (p.isHost ? " \u2605" : "") + (!p.isAlive ? " \xB7 \u043D\u0430\u0431\u043B\u044E\u0434\u0430\u0442\u0435\u043B\u044C" : "");
     li.append(dot2, name);
-    if (isHost && p.id !== snap.you) {
+    if (isHost && p.id !== snap.you && !p.isBot) {
       const kick = document.createElement("button");
       kick.className = "btn btn-sm btn-kick";
       kick.type = "button";
@@ -1150,6 +1150,8 @@ var lastGameOverSig = "";
 var gameOverInitDone = false;
 var joinRoomID = "";
 var connContext = "menu";
+var botMode = false;
+var botStarted = false;
 var myName = localStorage.getItem(NAME_KEY) || "";
 function init() {
   bindCreatePanel();
@@ -1203,6 +1205,7 @@ function sendConfig() {
 }
 function bindButtons() {
   $("btn-create").addEventListener("click", openCreate);
+  $("btn-bot").addEventListener("click", openBotMode);
   $("btn-refresh-rooms").addEventListener("click", refreshRooms);
   $("room-filter").addEventListener("input", renderRooms);
   $("room-state-filter").addEventListener("change", renderRooms);
@@ -1224,6 +1227,9 @@ function bindButtons() {
   });
   $("btn-start").addEventListener("click", () => {
     net?.send({ action: "start" });
+  });
+  $("btn-reset-ball").addEventListener("click", () => {
+    net?.send({ action: "reset_ball" });
   });
   $("btn-lobby-back").addEventListener("click", leaveToMenu);
   $("btn-restart").addEventListener("click", () => {
@@ -1298,9 +1304,29 @@ function captureName(form) {
   return name;
 }
 function openCreate() {
+  botMode = false;
+  botStarted = false;
+  setBotModeUI(false);
   $("create-name").value = myName;
   showFormError("create", null);
   showScreen("create");
+}
+function setBotModeUI(on) {
+  $("create-room-field").classList.toggle("hidden", on);
+  $("create-pass-field").classList.toggle("hidden", on);
+  $("create-max-field").classList.toggle("hidden", on);
+  $("bot-note").classList.toggle("hidden", !on);
+  $("btn-create-go").textContent = on ? "\u0418\u0433\u0440\u0430\u0442\u044C \u0441 \u0431\u043E\u0442\u043E\u043C" : "\u0421\u043E\u0437\u0434\u0430\u0442\u044C \u043A\u043E\u043C\u043D\u0430\u0442\u0443";
+}
+function openBotMode() {
+  botMode = true;
+  botStarted = false;
+  setBotModeUI(true);
+  $("create-name").value = myName;
+  $("inp-items").checked = true;
+  showFormError("create", null);
+  showScreen("create");
+  $("create-name").focus();
 }
 function openJoin(roomID) {
   joinRoomID = roomID;
@@ -1312,6 +1338,8 @@ function openJoin(roomID) {
   $("join-name").focus();
 }
 function backToMenu() {
+  botMode = false;
+  botStarted = false;
   joinRoomID = "";
   showFormError("create", null);
   showFormError("join", null);
@@ -1335,7 +1363,8 @@ async function createRoom() {
   const accel = $("inp-accel").checked;
   const ball = Number($("inp-ball").value);
   const items = $("inp-items").checked;
-  if (!name) {
+  const vsBot = botMode;
+  if (!vsBot && !name) {
     showFormError("create", "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043A\u043E\u043C\u043D\u0430\u0442\u044B");
     return;
   }
@@ -1350,7 +1379,9 @@ async function createRoom() {
         livesCount: lives,
         ballAccel: accel,
         addBallTime: ball,
-        items
+        items,
+        vsBot,
+        bots: 1
       })
     });
     const data = await res.json();
@@ -1436,9 +1467,17 @@ function handleSnapshot(snap) {
   physics.sync(snap);
   physics.onSnapshot(snap);
   const me = snap.players.find((p) => p.id === snap.you);
+  $("btn-reset-ball").classList.toggle("hidden", !(snap.state === "playing" && !!snap.you && snap.host === snap.you));
   if (snap.state === "waiting") {
     playing = false;
     showScreen("lobby");
+    if (botMode && !botStarted) {
+      const meHost = snap.players.some((p) => p.id === snap.you && p.isHost);
+      if (meHost) {
+        botStarted = true;
+        net?.send({ action: "start" });
+      }
+    }
     const sig = playersSignature(snap);
     if (sig !== lastLobbySig) {
       lastLobbySig = sig;

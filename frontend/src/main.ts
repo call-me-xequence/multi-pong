@@ -51,6 +51,8 @@ let lastGameOverSig = '';
 let gameOverInitDone = false;
 let joinRoomID = ''; // room selected on the join screen
 let connContext: 'create' | 'join' | 'menu' = 'menu';
+let botMode = false; // the create screen is configuring a "vs bot" match
+let botStarted = false; // auto-start already sent for the bot match
 let myName = localStorage.getItem(NAME_KEY) || '';
 
 function init(): void {
@@ -112,6 +114,7 @@ function sendConfig(): void {
 function bindButtons(): void {
   // Main menu
   $('btn-create').addEventListener('click', openCreate);
+  $('btn-bot').addEventListener('click', openBotMode);
   $('btn-refresh-rooms').addEventListener('click', refreshRooms);
   $('room-filter').addEventListener('input', renderRooms);
   $('room-state-filter').addEventListener('change', renderRooms);
@@ -139,6 +142,11 @@ function bindButtons(): void {
 
   $('btn-start').addEventListener('click', () => {
     net?.send({ action: 'start' });
+  });
+
+  // Host-only utility: put the ball(s) back to the centre (e.g. stuck ball).
+  $('btn-reset-ball').addEventListener('click', () => {
+    net?.send({ action: 'reset_ball' });
   });
 
   // Lobby / room screen
@@ -226,9 +234,36 @@ function captureName(form: 'create' | 'join'): string {
 }
 
 function openCreate(): void {
+  botMode = false;
+  botStarted = false;
+  setBotModeUI(false);
   ($('create-name') as HTMLInputElement).value = myName;
   showFormError('create', null);
   showScreen('create');
+}
+
+/** Toggles the create form between a normal room and a private "vs bot" match. */
+function setBotModeUI(on: boolean): void {
+  ($('create-room-field') as HTMLElement).classList.toggle('hidden', on);
+  ($('create-pass-field') as HTMLElement).classList.toggle('hidden', on);
+  ($('create-max-field') as HTMLElement).classList.toggle('hidden', on);
+  ($('bot-note') as HTMLElement).classList.toggle('hidden', !on);
+  ($('btn-create-go') as HTMLButtonElement).textContent = on
+    ? 'Играть с ботом'
+    : 'Создать комнату';
+}
+
+/** Opens the create form preconfigured for a 1×1 match against a strong bot. */
+function openBotMode(): void {
+  botMode = true;
+  botStarted = false;
+  setBotModeUI(true);
+  ($('create-name') as HTMLInputElement).value = myName;
+  // Abilities are the whole point of the bot mode: default them on.
+  ($('inp-items') as HTMLInputElement).checked = true;
+  showFormError('create', null);
+  showScreen('create');
+  ($('create-name') as HTMLInputElement).focus();
 }
 
 function openJoin(roomID: string): void {
@@ -242,6 +277,8 @@ function openJoin(roomID: string): void {
 }
 
 function backToMenu(): void {
+  botMode = false;
+  botStarted = false;
   joinRoomID = '';
   showFormError('create', null);
   showFormError('join', null);
@@ -267,8 +304,10 @@ async function createRoom(): Promise<void> {
   const accel = ($('inp-accel') as HTMLInputElement).checked;
   const ball = Number(($('inp-ball') as HTMLInputElement).value);
   const items = ($('inp-items') as HTMLInputElement).checked;
+  const vsBot = botMode;
 
-  if (!name) {
+  // Normal rooms need a name; the server picks one for a bot match.
+  if (!vsBot && !name) {
     showFormError('create', 'Введите название комнаты');
     return;
   }
@@ -285,6 +324,8 @@ async function createRoom(): Promise<void> {
         ballAccel: accel,
         addBallTime: ball,
         items,
+        vsBot,
+        bots: 1,
       }),
     });
     const data = await res.json();
@@ -382,9 +423,21 @@ function handleSnapshot(snap: Snapshot): void {
 
   const me = snap.players.find((p) => p.id === snap.you);
 
+  // Host-only "reset ball" button, visible while the match is running.
+  $('btn-reset-ball').classList.toggle('hidden', !(snap.state === 'playing' && !!snap.you && snap.host === snap.you));
+
   if (snap.state === 'waiting') {
     playing = false;
     showScreen('lobby');
+    // In a "vs bot" match the creator is always the host and the opponent is
+    // already seated, so start immediately instead of waiting in the lobby.
+    if (botMode && !botStarted) {
+      const meHost = snap.players.some((p) => p.id === snap.you && p.isHost);
+      if (meHost) {
+        botStarted = true;
+        net?.send({ action: 'start' });
+      }
+    }
     const sig = playersSignature(snap);
     if (sig !== lastLobbySig) {
       lastLobbySig = sig;

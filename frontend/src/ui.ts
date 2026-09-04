@@ -118,7 +118,8 @@ function renderPlayers(
 
     li.append(dot, name);
 
-    if (isHost && p.id !== snap.you) {
+    // Bots are server-controlled, so there is nothing to kick.
+    if (isHost && p.id !== snap.you && !p.isBot) {
       const kick = document.createElement('button');
       kick.className = 'btn btn-sm btn-kick';
       kick.type = 'button';

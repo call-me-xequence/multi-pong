@@ -156,6 +156,12 @@ func (h *Hub) WSHandler(c *gin.Context) {
 					"type": "error", "message": err.Error(),
 				})
 			}
+		case "reset_ball":
+			if err := room.ResetBall(playerID); err != nil {
+				queueJSON(player, map[string]interface{}{
+					"type": "error", "message": err.Error(),
+				})
+			}
 		case "use_item":
 			// Space can auto-repeat, and the client may race the snapshot that
 			// clears the slot, so a failed use is ignored rather than treated as a

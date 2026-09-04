@@ -45,6 +45,7 @@ const (
 	blindDuration   = 3.0 // flash blindness
 	shakeDuration   = 6.0 // screen shake on others
 	stickyStickTime = 0.6 // seconds a sticky ball sticks after a collision
+	stickyBallLife  = 5.5 // seconds a ball keeps being sticky after it is activated
 	fireSpeedBoost  = 0.5 // +50%
 	curveRate       = 3.5 // rad/s the curve ball bends
 	curveLifeSec    = 3.0 // seconds a curve ball keeps bending
@@ -81,7 +82,9 @@ func (r *Room) scheduleNextItemLocked() {
 }
 
 // grantRandomItemLocked gives a random item to a random alive player with an
-// empty hand (no-op when nobody is eligible).
+// empty hand (no-op when nobody is eligible). Bots take part in drops like any
+// other player, but they never keep the item: it is used (armed) immediately on
+// receipt, so a bot is a constant threat with power-ups.
 func (r *Room) grantRandomItemLocked() {
 	var eligible []*Player
 	for _, p := range r.Players {
@@ -94,6 +97,10 @@ func (r *Room) grantRandomItemLocked() {
 	}
 	p := eligible[rand.IntN(len(eligible))]
 	p.Item = rand.IntN(itemCount)
+	// Bots use the ability as soon as they get it (no held-item slot).
+	if p.IsBot {
+		r.armItemLocked(p)
+	}
 }
 
 // dropTickLocked is called every tick while playing.
@@ -125,7 +132,14 @@ func (r *Room) UseItem(id string) error {
 	if !p.IsAlive || r.State != StatePlaying {
 		return ErrCannotUseItem
 	}
+	r.armItemLocked(p)
+	return nil
+}
 
+// armItemLocked consumes p's held item and arms/activates it (no locking, the
+// caller holds the write lock and p must be alive with a held item during play).
+// Used both by humans (Space -> UseItem) and by bots the moment they get a drop.
+func (r *Room) armItemLocked(p *Player) {
 	now := time.Now()
 	held := p.Item
 	p.Item = ItemNone
@@ -153,7 +167,6 @@ func (r *Room) UseItem(id string) error {
 	// just the user) sees what was used even if the effect triggers instantly.
 	p.IconKey = itemKey(held)
 	p.IconUntil = now.Add(time.Duration(iconHold * float64(time.Second)))
-	return nil
 }
 
 // resetItemsLocked clears every player's hand and effects, then schedules the
@@ -189,6 +202,7 @@ func (r *Room) clearBallItemsLocked() {
 		b.OnFire = false
 		b.Curve = 0
 		b.Sticky = false
+		b.StickyUntil = time.Time{}
 		b.StuckUntil = time.Time{}
 		b.StuckToP = ""
 		b.IsFake = false
@@ -460,6 +474,7 @@ func (r *Room) triggerItemOnPaddleHitLocked(b *Ball, p *Player) {
 	case ItemSticky:
 		p.StickyArmT = time.Time{}
 		b.Sticky = true
+		b.StickyUntil = time.Now().Add(time.Duration(stickyBallLife * float64(time.Second)))
 	case ItemCurve:
 		p.CurvedArm = false
 		b.Curve = int(curveLifeSec * float64(r.Config.TickRate))
@@ -567,13 +582,22 @@ func (r *Room) ballSpeed(b *Ball) float64 {
 	return spd
 }
 
-// stickToPaddleLocked pins a sticky ball to a player's paddle for a moment.
+// stickToPaddleLocked pins a sticky ball to a player's paddle for a moment. The
+// ball remembers its offset from the paddle centre (so it rides along while the
+// paddle moves) and the direction it was flying, which the delayed release uses
+// to bounce it back into play as if the paddle had hit it.
 func (r *Room) stickToPaddleLocked(b *Ball, seg geometry.Segment, n geometry.Point, p *Player, t float64) {
 	b.StuckUntil = time.Now().Add(time.Duration(stickyStickTime * float64(time.Second)))
 	b.StuckToP = p.ID
-	b.StuckT = t
-	b.StuckNX = -n.X
-	b.StuckNY = -n.Y
+	b.StuckT = t - p.Angle
+	spd := math.Hypot(b.VX, b.VY)
+	if spd > 0 {
+		b.StuckNX, b.StuckNY = b.VX/spd, b.VY/spd
+	} else {
+		// No incoming velocity: treat it as heading into the goal so the paddle
+		// bounce sends it back into the field.
+		b.StuckNX, b.StuckNY = n.X, n.Y
+	}
 	pos := geometry.Add(seg.A, geometry.Mul(geometry.Sub(seg.B, seg.A), t))
 	b.X = pos.X - n.X*b.Radius
 	b.Y = pos.Y - n.Y*b.Radius
@@ -586,8 +610,10 @@ func (r *Room) clearBallEffectsLocked(b *Ball) {
 	b.OnFire = false
 	b.Curve = 0
 	b.Sticky = false
+	b.StickyUntil = time.Time{}
 	b.StuckUntil = time.Time{}
 	b.StuckToP = ""
+	b.StuckT = 0
 	b.IsFake = false
 	b.TetherOwner = ""
 	b.TetherTarget = ""
