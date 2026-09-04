@@ -1,10 +1,11 @@
 // net.ts — WebSocket connection wrapper with latency measurement and reconnect.
 
-import type { ClientMessage, ServerMessage, Snapshot, WelcomeMessage } from './types.js';
+import type { ClientMessage, ServerMessage, SfxEvent, Snapshot, WelcomeMessage } from './types.js';
 
 export interface NetHandlers {
   onWelcome: (w: WelcomeMessage) => void;
   onSnapshot: (s: Snapshot) => void;
+  onSfx: (events: SfxEvent[]) => void;
   onError: (msg: string) => void;
   onKicked: () => void;
   onClose: () => void;
@@ -47,6 +48,9 @@ export class Net {
           break;
         case 'snapshot':
           this.handlers.onSnapshot(m);
+          break;
+        case 'sfx':
+          this.handlers.onSfx(m.events);
           break;
         case 'error':
           this.handlers.onError(m.message);

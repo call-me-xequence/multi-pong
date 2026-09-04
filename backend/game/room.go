@@ -53,9 +53,18 @@ type Room struct {
 	nextBallAt       time.Time // when the next ball spawns after a goal (zero = none pending)
 	nextItemAt       time.Time // when the next item drops (zero = items disabled/stopped)
 	history          []historyEntry
+	rewinding        bool // true while a lag-comp rewind re-simulates (suppress sfx)
+	sfx              []sfxEvent
 
 	done   chan struct{}
 	onDone func()
+}
+
+// sfxEvent is a short, transient audio cue queued by the simulation and flushed
+// to the clients with the next broadcast (kind: wall / paddle / miss).
+type sfxEvent struct {
+	Kind   string `json:"k"`           // wall, paddle, miss
+	Player string `json:"p,omitempty"` // player the event relates to (e.g. who conceded)
 }
 
 // ballState and playerState capture the parts of the world needed to rewind.
@@ -343,6 +352,8 @@ func (r *Room) HandleInput(id string, dir int, seq uint32, lagMs float64) {
 // rewindToLocked restores the world to `at` and re-simulates forward to now,
 // applying queued inputs as their time arrives.
 func (r *Room) rewindToLocked(at time.Time) {
+	r.rewinding = true
+	defer func() { r.rewinding = false }()
 	snapIdx := -1
 	for i := range r.history {
 		if !r.history[i].t.After(at) {
@@ -915,7 +926,8 @@ func (r *Room) SnapshotJSON(youID string) []byte {
 	return data
 }
 
-// Broadcast sends the current snapshot to every connected player.
+// Broadcast sends the current snapshot to every connected player and flushes
+// any queued sound events as a small separate "sfx" message.
 func (r *Room) Broadcast() {
 	r.mu.RLock()
 	players := make([]*Player, len(r.Players))
@@ -932,6 +944,40 @@ func (r *Room) Broadcast() {
 		default: // slow client: drop this snapshot
 		}
 	}
+
+	// Transient audio cues (wall/paddle bounces, conceded goals).
+	r.mu.Lock()
+	evts := r.sfx
+	r.sfx = r.sfx[:0]
+	r.mu.Unlock()
+	if len(evts) == 0 {
+		return
+	}
+	payload, err := json.Marshal(struct {
+		Type   string     `json:"type"`
+		Events []sfxEvent `json:"events"`
+	}{Type: "sfx", Events: evts})
+	if err != nil {
+		return
+	}
+	for _, p := range players {
+		if p.IsBot {
+			continue
+		}
+		select {
+		case p.Send <- payload:
+		default:
+		}
+	}
+}
+
+// pushSfx queues an audio cue for the next broadcast. Ignored while a rewind is
+// re-simulating history so the same collision doesn't beep twice.
+func (r *Room) pushSfx(kind, player string) {
+	if r.rewinding || len(r.sfx) >= 32 {
+		return
+	}
+	r.sfx = append(r.sfx, sfxEvent{Kind: kind, Player: player})
 }
 
 // AliveCount returns how many players are still alive.

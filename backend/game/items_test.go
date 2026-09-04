@@ -287,6 +287,9 @@ func TestCurveBallEventuallyStraightens(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.AddBallInterval = 0
 	cfg.RespawnDelay = 100
+	// Cover almost the whole face so the curving ball can never sneak into a
+	// goal and vanish before its finite curve budget decays (it just bounces).
+	cfg.PaddleWidth = 0.9
 	r := NewRoom("curve", cfg, 2)
 	_, _ = r.AddPlayer("a", "A")
 	_, _ = r.AddPlayer("b", "B")

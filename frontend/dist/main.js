@@ -29,6 +29,9 @@ var Net = class {
         case "snapshot":
           this.handlers.onSnapshot(m);
           break;
+        case "sfx":
+          this.handlers.onSfx(m.events);
+          break;
         case "error":
           this.handlers.onError(m.message);
           break;
@@ -1328,6 +1331,135 @@ function updateItemSlot(snap) {
   else slot.classList.remove("flash");
 }
 
+// ../frontend/src/sound.ts
+var SFX_VOL_KEY = "neonpong.vol.sfx";
+var MUSIC_VOL_KEY = "neonpong.vol.music";
+var AUDIO = {
+  music: "audio/music.wav",
+  hitWall: "audio/hit-wall.wav",
+  hitPaddle: "audio/hit-paddle.wav",
+  click: "audio/click.wav",
+  win: "audio/win.wav",
+  miss: ["audio/miss/miss-1.wav", "audio/miss/miss-2.wav", "audio/miss/miss-3.wav"]
+};
+var clamp01 = (n) => Math.max(0, Math.min(1, n));
+function loadVol(key, dflt) {
+  const v = parseFloat(localStorage.getItem(key) ?? "");
+  return isFinite(v) ? clamp01(v) : dflt;
+}
+function saveVol(key, v) {
+  localStorage.setItem(key, String(clamp01(v)));
+}
+var SoundManager = class {
+  constructor() {
+    this.sfxVol = loadVol(SFX_VOL_KEY, 0.8);
+    this.musicVol = loadVol(MUSIC_VOL_KEY, 0.55);
+    this.musicEl = null;
+    this.pools = /* @__PURE__ */ new Map();
+    this.lastSfx = 0;
+    this.lastClick = 0;
+    this.started = false;
+    const unlock = () => {
+      if (!this.started) {
+        this.started = true;
+        this.startMusic();
+      }
+    };
+    window.addEventListener("pointerdown", unlock, { passive: true });
+    window.addEventListener("keydown", unlock, { passive: true });
+    window.addEventListener(
+      "click",
+      (e) => {
+        const t = e.target;
+        if (t && (t.tagName === "BUTTON" || t.classList.contains("btn"))) this.click();
+      },
+      { passive: true }
+    );
+  }
+  get sfxVolume() {
+    return this.sfxVol;
+  }
+  get musicVolume() {
+    return this.musicVol;
+  }
+  setSfxVolume(v) {
+    this.sfxVol = clamp01(v);
+    saveVol(SFX_VOL_KEY, this.sfxVol);
+  }
+  setMusicVolume(v) {
+    this.musicVol = clamp01(v);
+    saveVol(MUSIC_VOL_KEY, this.musicVol);
+    if (this.musicEl) this.musicEl.volume = this.musicVol;
+    if (this.started) this.startMusic();
+  }
+  /** Starts looping background music (safe to call repeatedly). */
+  startMusic() {
+    if (!this.musicEl) {
+      const m2 = new Audio(AUDIO.music);
+      m2.loop = true;
+      m2.preload = "auto";
+      m2.volume = this.musicVol;
+      this.musicEl = m2;
+    }
+    const m = this.musicEl;
+    if (this.musicVol <= 0) {
+      m.pause();
+      return;
+    }
+    if (m.paused) m.play().catch(() => {
+    });
+  }
+  /** Play a pooled cue; returns immediately if throttled or muted. */
+  sfx(file, pitch, minGapMs) {
+    const now = performance.now();
+    if (now - this.lastSfx < minGapMs || this.sfxVol <= 0) return;
+    this.lastSfx = now;
+    let pool = this.pools.get(file);
+    if (!pool) {
+      pool = [];
+      this.pools.set(file, pool);
+    }
+    let el = pool.find((a) => a.paused || a.ended);
+    if (!el) {
+      if (pool.length >= 6) return;
+      el = new Audio(file);
+      pool.push(el);
+    }
+    el.volume = this.sfxVol;
+    if (pitch !== 1) el.playbackRate = pitch;
+    el.currentTime = 0;
+    el.play().catch(() => {
+    });
+  }
+  /** Ball hit a plain wall. */
+  hitWall() {
+    this.sfx(AUDIO.hitWall, 0.95 + Math.random() * 0.12, 30);
+  }
+  /** Ball hit a paddle. */
+  hitPaddle() {
+    this.sfx(AUDIO.hitPaddle, 0.9 + Math.random() * 0.2, 40);
+  }
+  /** UI button click. */
+  click() {
+    const now = performance.now();
+    if (now - this.lastClick < 70) return;
+    this.lastClick = now;
+    this.sfx(AUDIO.click, 1, 0);
+  }
+  /** Match won. */
+  win() {
+    this.sfx(AUDIO.win, 1, 0);
+  }
+  /** "You let the ball in" — random file from the miss folder. */
+  miss() {
+    const list = AUDIO.miss;
+    if (list.length === 0) return;
+    const f = list[Math.floor(Math.random() * list.length)];
+    this.sfx(f, 1, 0);
+  }
+};
+var sound = new SoundManager();
+
 // ../frontend/src/main.ts
 var NAME_KEY = "neonpong.name";
 var net = null;
@@ -1366,6 +1498,7 @@ function init() {
   bindCreatePanel();
   bindButtons();
   bindKeys();
+  bindVolumePanel();
   refreshRooms();
   const roomParam = new URLSearchParams(location.search).get("room");
   if (roomParam) {
@@ -1440,12 +1573,36 @@ function bindButtons() {
   $("btn-reset-ball").addEventListener("click", () => {
     net?.send({ action: "reset_ball" });
   });
+  $("btn-audio").addEventListener("click", () => {
+    $("audio-panel").classList.toggle("hidden");
+  });
   $("btn-lobby-back").addEventListener("click", leaveToMenu);
   $("btn-restart").addEventListener("click", () => {
     $("game-over").classList.add("hidden");
     net?.send({ action: "start" });
   });
   $("btn-again").addEventListener("click", leaveToMenu);
+}
+function bindVolumePanel() {
+  const sfx = $("vol-sfx");
+  const music = $("vol-music");
+  const sfxLabel = $("val-vol-sfx");
+  const musicLabel = $("val-vol-music");
+  const paint = () => {
+    sfxLabel.textContent = String(Math.round(sound.sfxVolume * 100));
+    musicLabel.textContent = String(Math.round(sound.musicVolume * 100));
+    sfx.value = String(Math.round(sound.sfxVolume * 100));
+    music.value = String(Math.round(sound.musicVolume * 100));
+  };
+  paint();
+  sfx.addEventListener("input", () => {
+    sound.setSfxVolume(Number(sfx.value) / 100);
+    sfxLabel.textContent = sfx.value;
+  });
+  music.addEventListener("input", () => {
+    sound.setMusicVolume(Number(music.value) / 100);
+    musicLabel.textContent = music.value;
+  });
 }
 function isTypingTarget(target) {
   if (!(target instanceof HTMLElement)) return false;
@@ -1623,6 +1780,13 @@ function connect(roomID, password, name) {
       meID = w.you;
     },
     onSnapshot: handleSnapshot,
+    onSfx: (events) => {
+      for (const e of events) {
+        if (e.k === "wall") sound.hitWall();
+        else if (e.k === "paddle") sound.hitPaddle();
+        else if (e.k === "miss" && e.p === meID) sound.miss();
+      }
+    },
     onError: (m) => {
       net?.close();
       if (connContext === "create") {
@@ -1677,6 +1841,8 @@ function handleSnapshot(snap) {
   physics.onSnapshot(snap);
   const me = snap.players.find((p) => p.id === snap.you);
   $("btn-reset-ball").classList.toggle("hidden", !(snap.state === "playing" && !!snap.you && snap.host === snap.you));
+  $("btn-audio").classList.toggle("hidden", snap.state !== "playing");
+  if (snap.state !== "playing") $("audio-panel").classList.add("hidden");
   if (snap.state === "waiting") {
     playing = false;
     showScreen("lobby");
@@ -1842,6 +2008,7 @@ function showGameOver(snap) {
   $("game-over-players").textContent = isHost ? `\u0418\u0433\u0440\u043E\u043A\u043E\u0432 \u0432 \u043A\u043E\u043C\u043D\u0430\u0442\u0435: ${snap.players.length} \u2014 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u0442\u0435 \u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0438 \u043D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u0418\u0433\u0440\u0430\u0442\u044C \u0441\u043D\u043E\u0432\u0430\xBB` : "\u041E\u0436\u0438\u0434\u0430\u043D\u0438\u0435 \u043F\u0435\u0440\u0435\u0437\u0430\u043F\u0443\u0441\u043A\u0430 \u0441\u043E\u0437\u0434\u0430\u0442\u0435\u043B\u0435\u043C...";
   if (!gameOverInitDone) {
     gameOverInitDone = true;
+    if (winner && winner.id === meID) sound.win();
     const lives = snap.lives ?? 3;
     const accel = snap.ballAccel ?? true;
     const ball = snap.addBallTime ?? 15;
@@ -1881,6 +2048,7 @@ function leaveToMenu() {
   lastLobbySig = "";
   lastGameOverSig = "";
   gameOverInitDone = false;
+  $("audio-panel").classList.add("hidden");
   backToMenu();
 }
 function buildInviteLink(roomID) {

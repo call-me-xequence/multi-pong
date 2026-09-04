@@ -16,6 +16,7 @@ import {
   showToast,
 } from './ui.js';
 import type { Snapshot, RoomInfo } from './types.js';
+import { sound } from './sound.js';
 
 const NAME_KEY = 'neonpong.name';
 
@@ -59,6 +60,7 @@ function init(): void {
   bindCreatePanel();
   bindButtons();
   bindKeys();
+  bindVolumePanel();
   refreshRooms();
 
   const roomParam = new URLSearchParams(location.search).get('room');
@@ -149,6 +151,11 @@ function bindButtons(): void {
     net?.send({ action: 'reset_ball' });
   });
 
+  // Volume controls (visible only during a match).
+  $('btn-audio').addEventListener('click', () => {
+    $('audio-panel').classList.toggle('hidden');
+  });
+
   // Lobby / room screen
   $('btn-lobby-back').addEventListener('click', leaveToMenu);
 
@@ -158,6 +165,30 @@ function bindButtons(): void {
   });
 
   $('btn-again').addEventListener('click', leaveToMenu);
+}
+
+function bindVolumePanel(): void {
+  const sfx = $('vol-sfx') as HTMLInputElement;
+  const music = $('vol-music') as HTMLInputElement;
+  const sfxLabel = $('val-vol-sfx');
+  const musicLabel = $('val-vol-music');
+
+  const paint = (): void => {
+    sfxLabel.textContent = String(Math.round(sound.sfxVolume * 100));
+    musicLabel.textContent = String(Math.round(sound.musicVolume * 100));
+    sfx.value = String(Math.round(sound.sfxVolume * 100));
+    music.value = String(Math.round(sound.musicVolume * 100));
+  };
+  paint();
+
+  sfx.addEventListener('input', () => {
+    sound.setSfxVolume(Number(sfx.value) / 100);
+    sfxLabel.textContent = sfx.value;
+  });
+  music.addEventListener('input', () => {
+    sound.setMusicVolume(Number(music.value) / 100);
+    musicLabel.textContent = music.value;
+  });
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -361,6 +392,13 @@ function connect(roomID: string, password: string, name: string): void {
       meID = w.you;
     },
     onSnapshot: handleSnapshot,
+    onSfx: (events) => {
+      for (const e of events) {
+        if (e.k === 'wall') sound.hitWall();
+        else if (e.k === 'paddle') sound.hitPaddle();
+        else if (e.k === 'miss' && e.p === meID) sound.miss();
+      }
+    },
     onError: (m) => {
       net?.close();
       if (connContext === 'create') {
@@ -425,6 +463,9 @@ function handleSnapshot(snap: Snapshot): void {
 
   // Host-only "reset ball" button, visible while the match is running.
   $('btn-reset-ball').classList.toggle('hidden', !(snap.state === 'playing' && !!snap.you && snap.host === snap.you));
+  // Volume controls are only available during the match (not on the menu).
+  $('btn-audio').classList.toggle('hidden', snap.state !== 'playing');
+  if (snap.state !== 'playing') $('audio-panel').classList.add('hidden');
 
   if (snap.state === 'waiting') {
     playing = false;
@@ -638,6 +679,8 @@ function showGameOver(snap: Snapshot): void {
 
   if (!gameOverInitDone) {
     gameOverInitDone = true;
+    // Victory fanfare when the match is over and I am the last one standing.
+    if (winner && winner.id === meID) sound.win();
     const lives = snap.lives ?? 3;
     const accel = snap.ballAccel ?? true;
     const ball = snap.addBallTime ?? 15;
@@ -681,6 +724,7 @@ function leaveToMenu(): void {
   lastLobbySig = '';
   lastGameOverSig = '';
   gameOverInitDone = false;
+  $('audio-panel').classList.add('hidden');
   backToMenu();
 }
 

@@ -243,6 +243,7 @@ func (r *Room) handleFace(b *Ball, seg geometry.Segment, p *Player, px, py float
 		if outward > 0 && sdNow >= -b.Radius {
 			if b.Sticky || !p.StickyArmT.IsZero() {
 				// The arming contact of the sticky item sticks to the paddle too.
+				r.pushSfx("paddle", p.ID)
 				if !b.Sticky {
 					b.Sticky = true
 					b.StickyUntil = time.Now().Add(time.Duration(stickyBallLife * float64(time.Second)))
@@ -252,6 +253,7 @@ func (r *Room) handleFace(b *Ball, seg geometry.Segment, p *Player, px, py float
 				r.stickToPaddleLocked(b, seg, n, p, t)
 				return false
 			}
+			r.pushSfx("paddle", p.ID)
 			r.bouncePaddle(b, seg, n, t, center, half)
 			r.triggerItemOnPaddleHitLocked(b, p)
 		}
@@ -264,6 +266,7 @@ func (r *Room) handleFace(b *Ball, seg geometry.Segment, p *Player, px, py float
 			// The shield makes the goal impenetrable: reflect the ball off the
 			// whole face and break.
 			p.ShieldT = time.Time{}
+			r.pushSfx("paddle", p.ID)
 			r.bouncePaddle(b, seg, n, t, 0.5, 0.5)
 			return false
 		}
@@ -340,6 +343,7 @@ func (r *Room) collideWall(b *Ball, seg geometry.Segment) {
 	if dot < 0 {
 		b.VX -= 2 * dot * nx
 		b.VY -= 2 * dot * ny
+		r.pushSfx("wall", "")
 	}
 
 	// Push the ball out of the wall.
@@ -433,6 +437,8 @@ func (r *Room) containBallLocked(b *Ball) {
 // arena is now empty, schedules the next ball after a short pause.
 func (r *Room) applyGoalLocked(b *Ball, p *Player) {
 	p.Lives--
+	// The conceding player hears the "missed the ball" cue.
+	r.pushSfx("miss", p.ID)
 	eliminated := false
 	if p.Lives <= 0 {
 		p.Lives = 0

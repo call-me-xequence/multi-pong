@@ -136,7 +136,19 @@
         <div id="hud-players" class="hud-players"></div>
         <div class="hud-right">
           <div id="hud-time" class="hud-time">0:00</div>
+          <button id="btn-audio" class="btn btn-sm btn-audio hidden" type="button" title="Громкость">Звук</button>
           <button id="btn-reset-ball" class="btn btn-sm btn-reset-ball hidden" type="button" title="Завершить розыгрыш и вбросить мяч заново">Сбросить мяч</button>
+        </div>
+      </div>
+      <div id="audio-panel" class="audio-panel hidden">
+        <div class="audio-panel-title">Громкость</div>
+        <div class="field">
+          <label>Эффекты: <b id="val-vol-sfx">80</b></label>
+          <input id="vol-sfx" type="range" min="0" max="100" step="1" value="80" />
+        </div>
+        <div class="field">
+          <label>Музыка: <b id="val-vol-music">55</b></label>
+          <input id="vol-music" type="range" min="0" max="100" step="1" value="55" />
         </div>
       </div>
       <div id="item-slot" class="item-slot hidden">

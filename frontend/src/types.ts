@@ -82,7 +82,23 @@ export interface KickedMessage {
   type: 'kicked';
 }
 
-export type ServerMessage = Snapshot | WelcomeMessage | ErrorMessage | PongMessage | KickedMessage;
+export interface SfxEvent {
+  k: string; // 'wall' | 'paddle' | 'miss'
+  p?: string; // player the event relates to (e.g. who conceded)
+}
+
+export interface SfxMessage {
+  type: 'sfx';
+  events: SfxEvent[];
+}
+
+export type ServerMessage =
+  | Snapshot
+  | WelcomeMessage
+  | ErrorMessage
+  | PongMessage
+  | KickedMessage
+  | SfxMessage;
 
 export interface ClientMoveMessage {
   action: 'move';
