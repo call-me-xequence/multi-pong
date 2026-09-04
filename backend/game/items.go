@@ -47,7 +47,7 @@ const (
 	stickyStickTime = 0.6 // seconds a sticky ball sticks after a collision
 	stickyBallLife  = 5.5 // seconds a ball keeps being sticky after it is activated
 	fireSpeedBoost  = 0.5 // +50%
-	curveRate       = 3.5 // rad/s the curve ball bends
+	curveRate       = 1.8 // rad/s the curve ball bends
 	curveLifeSec    = 3.0 // seconds a curve ball keeps bending
 	tetherMaxHits   = 3   // opponent paddle bounces before the rope breaks
 	tetherPaddleLen = 2.0 // rope length in paddle lengths
