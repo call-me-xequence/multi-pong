@@ -62,6 +62,7 @@ export class GameRenderer {
   private ballRadius = 9;
   private sides = 6;
   private myIndex = 0;
+  private camAngle = 0; // world rotation applied this frame (camera keeps my goal at the bottom)
   private fxSeen = new Map<string, number>(); // key -> first-seen ms, pop anims
 
   constructor(private canvas: HTMLCanvasElement) {
@@ -128,6 +129,7 @@ export class GameRenderer {
     ctx.fillRect(0, 0, w, h);
 
     const camAngle = this.myIndex >= 0 ? Math.PI / 2 - faceMidAngle(this.sides, this.myIndex) : 0;
+    this.camAngle = camAngle;
     const scale = this.fitScale(w, h);
     const cx = w / 2;
     const cy = h / 2;
@@ -342,17 +344,24 @@ export class GameRenderer {
 
       ctx.save();
       ctx.globalAlpha = Math.min(1, 0.75 + age * 0.01);
-      drawItemIcon(ctx, key, bx, by, iconR * pop);
+      // Icons are drawn screen-upright (undo the world camera rotation around
+      // the icon) so they read correctly from the local player's camera no
+      // matter which goal they sit behind (the map rotates for every player).
+      ctx.translate(bx, by);
+      ctx.rotate(-this.camAngle);
+      drawItemIcon(ctx, key, 0, 0, iconR * pop);
+      ctx.restore();
       // Expanding ring when the effect just appeared so everyone notices.
       if (age < 600) {
+        ctx.save();
         ctx.globalAlpha = 1 - age / 600;
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(bx, by, iconR * (1.4 + (age / 600) * 1.6), 0, Math.PI * 2);
         ctx.stroke();
+        ctx.restore();
       }
-      ctx.restore();
     }
 
     // prune old entries

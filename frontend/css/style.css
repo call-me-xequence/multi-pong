@@ -357,13 +357,15 @@ input[type='checkbox'] {
   padding: 6px 14px;
 }
 
-/* Host-only "reset ball" helper (bottom of the top HUD bar). */
+/* Host-only "reset ball" helper — top-right, next to the match timer. */
+.hud-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .btn-reset-ball {
-  position: absolute;
-  top: 62px;
-  left: 50%;
-  transform: translateX(-50%);
   pointer-events: auto;
+  flex: none;
   font-size: 13px;
   padding: 6px 14px;
   background: rgba(0, 240, 255, 0.08);

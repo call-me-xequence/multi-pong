@@ -587,6 +587,8 @@ var GameRenderer = class {
     this.ballRadius = 9;
     this.sides = 6;
     this.myIndex = 0;
+    this.camAngle = 0;
+    // world rotation applied this frame (camera keeps my goal at the bottom)
     this.fxSeen = /* @__PURE__ */ new Map();
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("2D context unavailable");
@@ -636,6 +638,7 @@ var GameRenderer = class {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, w, h);
     const camAngle = this.myIndex >= 0 ? Math.PI / 2 - faceMidAngle(this.sides, this.myIndex) : 0;
+    this.camAngle = camAngle;
     const scale = this.fitScale(w, h);
     const cx = w / 2;
     const cy = h / 2;
@@ -818,16 +821,20 @@ var GameRenderer = class {
       const pop = 1 + Math.max(0, 0.6 * Math.exp(-age * 6e-3));
       ctx.save();
       ctx.globalAlpha = Math.min(1, 0.75 + age * 0.01);
-      drawItemIcon(ctx, key, bx, by, iconR * pop);
+      ctx.translate(bx, by);
+      ctx.rotate(-this.camAngle);
+      drawItemIcon(ctx, key, 0, 0, iconR * pop);
+      ctx.restore();
       if (age < 600) {
+        ctx.save();
         ctx.globalAlpha = 1 - age / 600;
         ctx.strokeStyle = "#ffffff";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(bx, by, iconR * (1.4 + age / 600 * 1.6), 0, Math.PI * 2);
         ctx.stroke();
+        ctx.restore();
       }
-      ctx.restore();
     }
     if (this.fxSeen.size > 200) {
       for (const [k, t] of this.fxSeen) {

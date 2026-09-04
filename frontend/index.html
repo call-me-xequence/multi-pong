@@ -134,8 +134,10 @@
       <canvas id="game-canvas"></canvas>
       <div id="hud" class="hud">
         <div id="hud-players" class="hud-players"></div>
-        <div id="hud-time" class="hud-time">0:00</div>
-        <button id="btn-reset-ball" class="btn btn-sm btn-reset-ball hidden" type="button" title="Вернуть мяч в центр поля">↺ Мяч</button>
+        <div class="hud-right">
+          <div id="hud-time" class="hud-time">0:00</div>
+          <button id="btn-reset-ball" class="btn btn-sm btn-reset-ball hidden" type="button" title="Завершить розыгрыш и вбросить мяч заново">Сбросить мяч</button>
+        </div>
       </div>
       <div id="item-slot" class="item-slot hidden">
         <canvas id="item-slot-canvas" width="64" height="64"></canvas>
