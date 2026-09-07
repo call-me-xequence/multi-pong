@@ -100,6 +100,16 @@ func (r *Room) simulate(dt float64) {
 			b.StickyUntil = time.Time{}
 		}
 
+		// A fire ball burns out after a short while and drops back to normal
+		// speed — it must not stay hot for the whole rally (or forever when
+		// other abilities keep the ball alive).
+		if b.OnFire && !b.FireUntil.IsZero() && now.After(b.FireUntil) {
+			b.OnFire = false
+			b.SpeedMul = 1
+			b.FireUntil = time.Time{}
+			r.normalizeBallLocked(b)
+		}
+
 		// Sticky ball handling (stuck to a paddle/wall for a short moment).
 		if !b.StuckUntil.IsZero() {
 			if b.StuckUntil.After(now) {
@@ -240,11 +250,11 @@ func (r *Room) handleFace(b *Ball, seg geometry.Segment, p *Player, px, py float
 	// Goal zone: the ball crossed the face line from inside to outside.
 	if outward > 0 && sdPrev < 0 && sdNow >= 0 {
 		if p.ShieldT.After(time.Now()) {
-			// The shield makes the goal impenetrable: reflect the ball off the
-			// whole face and break.
-			p.ShieldT = time.Time{}
+			// The shield makes the goal impenetrable for the whole shield window:
+			// every ball that would score is reflected cleanly back into the field
+			// (no paddle steering, so it can't be flung sideways and re-enter).
 			r.pushSfx("paddle", p.ID)
-			r.bouncePaddle(b, seg, n, t, 0.5, 0.5)
+			r.bouncePaddle(b, seg, n, 0.5, 0.5, 0.5)
 			return false
 		}
 		return true

@@ -18,6 +18,7 @@ type Ball struct {
 	Sticky   bool    // sticky ball: briefly sticks on any collision
 
 	StickyUntil time.Time // when the Sticky effect wears off (zero = not sticky)
+	FireUntil   time.Time // when the fire effect wears off (zero = not burning)
 
 	StuckUntil time.Time // while set the ball is stuck (velocity zero)
 	StuckToP   string    // player id the stuck ball follows ("" = fixed to a wall point)

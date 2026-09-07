@@ -47,6 +47,7 @@ const (
 	stickyStickTime = 0.6 // seconds a sticky ball sticks after a collision
 	stickyBallLife  = 5.5 // seconds a ball keeps being sticky after it is activated
 	fireSpeedBoost  = 0.5 // +50%
+	fireBallLife    = 5.0 // seconds a ball keeps burning after it is ignited
 	curveRate       = 1.8 // rad/s the curve ball bends
 	curveLifeSec    = 3.0 // seconds a curve ball keeps bending
 	tetherMaxHits   = 3   // opponent paddle bounces before the rope breaks
@@ -200,6 +201,7 @@ func (r *Room) clearBallItemsLocked() {
 	for _, b := range r.Balls {
 		b.SpeedMul = 1
 		b.OnFire = false
+		b.FireUntil = time.Time{}
 		b.Curve = 0
 		b.Sticky = false
 		b.StickyUntil = time.Time{}
@@ -477,6 +479,7 @@ func (r *Room) triggerItemOnPaddleHitLocked(b *Ball, p *Player) {
 		p.FireArmT = time.Time{}
 		b.OnFire = true
 		b.SpeedMul = 1 + fireSpeedBoost
+		b.FireUntil = time.Now().Add(time.Duration(fireBallLife * float64(time.Second)))
 		spd := math.Hypot(b.VX, b.VY)
 		if spd > 0 {
 			r.setBallSpeed(b, spd*(1+fireSpeedBoost))
@@ -552,6 +555,7 @@ func (r *Room) spawnFakeMirrorLocked(b *Ball, owner *Player) {
 		Radius:    b.Radius,
 		SpeedMul:  speedMulForBall(b),
 		OnFire:    b.OnFire,
+		FireUntil: b.FireUntil,
 		IsFake:    true,
 		FakeOwner: owner.ID,
 	}
@@ -618,6 +622,7 @@ func (r *Room) stickToPaddleLocked(b *Ball, seg geometry.Segment, n geometry.Poi
 func (r *Room) clearBallEffectsLocked(b *Ball) {
 	b.SpeedMul = 1
 	b.OnFire = false
+	b.FireUntil = time.Time{}
 	b.Curve = 0
 	b.Sticky = false
 	b.StickyUntil = time.Time{}

@@ -127,7 +127,7 @@ func TestShieldBlocksGoal(t *testing.T) {
 	b.VY = 260 * math.Sin(angle)
 
 	lives := r.Players[0].Lives
-	for i := 0; i < 180; i++ {
+	for i := 0; i < 180; i++ { // the ball keeps attacking the open goal
 		r.Update(1.0 / 60.0)
 	}
 	r.mu.RLock()
@@ -135,8 +135,8 @@ func TestShieldBlocksGoal(t *testing.T) {
 	if r.Players[0].Lives < lives {
 		t.Fatalf("shield should have blocked the goal (lives %d -> %d)", lives, r.Players[0].Lives)
 	}
-	if r.Players[0].ShieldT.After(time.Now()) {
-		t.Fatal("shield should have broken after blocking")
+	if !r.Players[0].ShieldT.After(time.Now()) {
+		t.Fatal("shield was consumed by one block — it must stay impenetrable for the whole window")
 	}
 }
 
@@ -181,6 +181,58 @@ func TestFireBallSpeedsUp(t *testing.T) {
 	}
 	if spd := r.Balls[0].Speed(); spd < 260*1.45 {
 		t.Fatalf("fire ball too slow: %.1f", spd)
+	}
+}
+
+// A fire ball must burn out after its window: the effect is temporary, not
+// permanent (regression — fire used to last the whole rally / forever).
+func TestFireBallBurnsOut(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AddBallInterval = 0
+	cfg.RespawnDelay = 100
+	r := NewRoom("fireout", cfg, 2)
+	if _, err := r.AddPlayer("a", "A"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.AddPlayer("b", "B"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Start("a"); err != nil {
+		t.Fatal(err)
+	}
+	serveNow(r)
+
+	r.mu.Lock()
+	b := r.Balls[0]
+	b.OnFire = true
+	b.SpeedMul = 1.5
+	b.FireUntil = time.Now().Add(5 * time.Second)
+	b.X, b.Y = 0, 0
+	b.VX = 260 * 1.5 * 0.7071
+	b.VY = 260 * 1.5 * -0.7071
+	r.mu.Unlock()
+
+	r.Update(1.0 / 60.0)
+	r.mu.RLock()
+	if !r.Balls[0].OnFire {
+		r.mu.RUnlock()
+		t.Fatal("fire ball burned out before its window")
+	}
+	r.mu.RUnlock()
+
+	// Expire the window: the next tick must extinguish it and drop the speed.
+	r.mu.Lock()
+	r.Balls[0].FireUntil = time.Now().Add(-time.Millisecond)
+	r.mu.Unlock()
+	r.Update(1.0 / 60.0)
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.Balls[0].OnFire {
+		t.Fatal("fire ball still burning after its window expired")
+	}
+	if spd := r.Balls[0].Speed(); spd > 260*1.1 {
+		t.Fatalf("fire ball kept boosted speed after burning out: %.1f", spd)
 	}
 }
 
