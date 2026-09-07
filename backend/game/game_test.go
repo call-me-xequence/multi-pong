@@ -9,6 +9,16 @@ import (
 	"neonpong/geometry"
 )
 
+// serveNow spawns the first ball immediately, skipping the 3s pre-serve
+// countdown that Start() schedules. Tests that need a ball right after Start
+// call this.
+func serveNow(r *Room) {
+	r.mu.Lock()
+	r.nextBallAt = time.Now().Add(-time.Second)
+	r.mu.Unlock()
+	r.Update(1.0 / float64(r.Config.TickRate))
+}
+
 func TestGeneratePolygonAndChamfer(t *testing.T) {
 	for sides := 3; sides <= 8; sides++ {
 		verts := geometry.GeneratePolygon(sides, 300)
@@ -43,6 +53,7 @@ func TestSimulationRunsAndKeepsBallInside(t *testing.T) {
 	if err := r.Start("pa"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	serveNow(r)
 	if r.State != StatePlaying {
 		t.Fatalf("expected playing, got %s", r.State)
 	}
@@ -76,6 +87,7 @@ func TestTwoPlayerSimulation(t *testing.T) {
 	if err := r.Start("a"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	serveNow(r)
 	if r.State != StatePlaying {
 		t.Fatalf("expected playing, got %s", r.State)
 	}
@@ -114,6 +126,7 @@ func TestPaddleBouncesBall(t *testing.T) {
 	if err := r.Start("pa"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	serveNow(r)
 
 	// Aim the ball exactly at the center of face 0 (where the paddle sits).
 	b := r.Balls[0]
@@ -172,6 +185,7 @@ func TestGoalRemovesBallAndRespawnsAfterDelay(t *testing.T) {
 	if err := r.Start("a"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	serveNow(r)
 
 	// Park player A's paddle away from the face center so the ball scores.
 	r.mu.Lock()
@@ -290,7 +304,7 @@ func TestInputSequenceEcho(t *testing.T) {
 	r.SetInput("a", -1, 9)
 	r.SetInput("a", 0, 5) // older/out-of-order seq must be ignored
 
-	// Inputs are queued during play (lag compensation) and applied on the next tick.
+	// Inputs apply immediately; an older/out-of-order seq is ignored.
 	r.Update(1.0 / float64(cfg.TickRate))
 
 	r.mu.RLock()
@@ -320,76 +334,6 @@ func TestInputSequenceEcho(t *testing.T) {
 	}
 }
 
-func TestLagCompensationBlocksLateInput(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Sides = 4
-	cfg.Radius = 300
-	cfg.BallSpeed = 260
-	cfg.BallAccel = false
-	cfg.AddBallInterval = 0
-	cfg.RespawnDelay = 100 // effectively disable respawn during the test
-
-	dt := 1.0 / float64(cfg.TickRate)
-
-	makeRoom := func() *Room {
-		r := NewRoom("lc", cfg, 4)
-		for i := 0; i < 4; i++ {
-			if _, err := r.AddPlayer("p"+string(rune('a'+i)), "P"); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if err := r.Start("pa"); err != nil {
-			t.Fatalf("start: %v", err)
-		}
-		// Backdate simTime so the fast test loop stays aligned with wall-clock time
-		// (lag compensation timestamps inputs with time.Now()).
-		r.mu.Lock()
-		r.simTime = time.Now().Add(-45 * time.Duration(dt*float64(time.Second)))
-		r.mu.Unlock()
-		return r
-	}
-	setup := func(r *Room) {
-		r.mu.Lock()
-		b := r.Balls[0]
-		b.X, b.Y = 0, 0
-		angle := geometry.FaceMidAngle(4, 0)
-		b.VX = cfg.BallSpeed * math.Cos(angle)
-		b.VY = cfg.BallSpeed * math.Sin(angle)
-		// Paddle off-center: the ball (aimed at the face center) will miss and score.
-		r.Players[0].Angle = 0.85
-		r.mu.Unlock()
-	}
-
-	// Control: the input arrives too late for the paddle to reach the crossing point.
-	late := makeRoom()
-	setup(late)
-	for i := 0; i < 40; i++ {
-		late.Update(dt)
-	}
-	late.HandleInput("pa", -1, 1, 0)
-	for i := 0; i < 20; i++ {
-		late.Update(dt)
-	}
-	if late.Players[0].Lives >= cfg.Lives {
-		t.Fatalf("control: expected the ball to score without lag compensation")
-	}
-
-	// Lag compensated: the same input, reported 250ms late, must be replayed
-	// earlier and block the ball.
-	comp := makeRoom()
-	setup(comp)
-	for i := 0; i < 40; i++ {
-		comp.Update(dt)
-	}
-	comp.HandleInput("pa", -1, 1, 250)
-	for i := 0; i < 20; i++ {
-		comp.Update(dt)
-	}
-	if comp.Players[0].Lives < cfg.Lives {
-		t.Fatalf("lag compensation failed: ball scored on a paddle that moved in time")
-	}
-}
-
 func TestSixPlayerReformAndLeftPaddle(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.AddBallInterval = 0
@@ -403,6 +347,7 @@ func TestSixPlayerReformAndLeftPaddle(t *testing.T) {
 	if err := r.Start("pa"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	serveNow(r)
 	if r.Config.Sides != 6 {
 		t.Fatalf("expected 6 sides at start, got %d", r.Config.Sides)
 	}

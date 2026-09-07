@@ -28,6 +28,7 @@ type wireMsg struct {
 		X float64 `json:"x"`
 		Y float64 `json:"y"`
 	} `json:"balls"`
+	RespawnIn float64 `json:"respawnIn"`
 }
 
 func newTestServer(h *Hub) *httptest.Server {
@@ -109,7 +110,8 @@ func TestCreateRoomAndWebSocketFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 3. Both players should see a playing snapshot with 2 players and a ball.
+	// 3. Both players should see a playing snapshot with 2 players and a pending
+	// pre-serve countdown (the ball appears after the 3s countdown).
 	snap := readUntil(t, c1, func(m *wireMsg) bool {
 		return m.Type == "snapshot" && m.State == game.StatePlaying
 	})
@@ -119,8 +121,8 @@ func TestCreateRoomAndWebSocketFlow(t *testing.T) {
 	if len(snap.Players) != 2 {
 		t.Fatalf("expected 2 players, got %d", len(snap.Players))
 	}
-	if len(snap.Balls) == 0 {
-		t.Fatal("expected at least one ball")
+	if snap.RespawnIn <= 0 {
+		t.Fatal("expected a pre-serve countdown after start")
 	}
 
 	// 4. Send a move and make sure it doesn't error the connection.

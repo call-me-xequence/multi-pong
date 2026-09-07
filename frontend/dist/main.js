@@ -163,27 +163,12 @@ function buildWalls(sides, radius, chamfer) {
 
 // ../frontend/src/physics.ts
 var RENDER_DELAY_MS = 80;
-var CURVE_RATE = 3.5;
-var CORRECTION_MS = 100;
-var CORRECTION_THRESHOLD = 20;
-var MAX_FRAME_DT = 0.05;
-var LocalPhysics = class {
+var NetClock = class {
   constructor() {
-    this.walls = [];
-    this.ballRadius = 9;
-    this.balls = [];
-    this.corrections = [];
-    // One-way network latency in seconds; used to align predicted balls with
-    // authoritative snapshots (server state is this far in the past).
-    this.latencySec = 0.06;
     this.timeBase = false;
     this.refServerT = 0;
     this.refClientNow = 0;
     this.delayMs = RENDER_DELAY_MS;
-  }
-  setup(sides, radius, chamfer, ballRadius) {
-    this.walls = buildWalls(sides, radius, chamfer);
-    this.ballRadius = ballRadius;
   }
   /** Establishes the client<->server clock mapping. */
   sync(snap) {
@@ -193,87 +178,14 @@ var LocalPhysics = class {
       this.timeBase = true;
     }
   }
-  /** Server's wall-clock time right now (estimated). */
-  estimatedServerNow() {
-    if (!this.timeBase) return 0;
-    return this.refServerT + (performance.now() - this.refClientNow);
-  }
-  /** Adjust the interpolation delay (for other players' paddles). */
+  /** Adjust the interpolation delay. */
   setDelay(ms) {
     this.delayMs = Math.max(40, Math.min(300, ms));
   }
+  /** Server time the frame should render at (interpolation target). */
   get renderTime() {
-    return this.estimatedServerNow() - this.delayMs;
-  }
-  /** Re-syncs the predicted balls with a fresh authoritative snapshot. */
-  onSnapshot(snap) {
-    while (this.balls.length < snap.balls.length) {
-      const s = snap.balls[this.balls.length];
-      this.balls.push({ x: s.x, y: s.y, vx: s.vx, vy: s.vy, curve: s.cv ?? 0 });
-      this.corrections.push({ x: 0, y: 0 });
-    }
-    this.balls.length = snap.balls.length;
-    this.corrections.length = snap.balls.length;
-    const lead = Math.max(0, this.latencySec);
-    for (let i = 0; i < snap.balls.length; i++) {
-      const s = snap.balls[i];
-      const b = this.balls[i];
-      b.curve = s.cv ?? 0;
-      const tx = s.x + s.vx * lead;
-      const ty = s.y + s.vy * lead;
-      const ex = tx - b.x;
-      const ey = ty - b.y;
-      const err = Math.hypot(ex, ey);
-      this.corrections[i] = err > CORRECTION_THRESHOLD ? { x: ex, y: ey } : { x: 0, y: 0 };
-      b.vx = s.vx;
-      b.vy = s.vy;
-    }
-  }
-  /** Advances the local ball simulation (called every animation frame). */
-  step(dt) {
-    if (dt <= 0) return;
-    if (dt > MAX_FRAME_DT) dt = MAX_FRAME_DT;
-    for (let i = 0; i < this.balls.length; i++) {
-      const b = this.balls[i];
-      if (b.curve > 0) {
-        const ang = CURVE_RATE * dt;
-        const c2 = Math.cos(ang);
-        const s = Math.sin(ang);
-        const nx = b.vx * c2 - b.vy * s;
-        b.vy = b.vx * s + b.vy * c2;
-        b.vx = nx;
-      }
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
-      this.collideBall(b);
-      const c = this.corrections[i];
-      const k = Math.min(1, dt * 1e3 / CORRECTION_MS);
-      b.x += c.x * k;
-      b.y += c.y * k;
-      c.x -= c.x * k;
-      c.y -= c.y * k;
-    }
-  }
-  collideBall(b) {
-    for (const seg of this.walls) {
-      const closest = closestPointOnSegment({ x: b.x, y: b.y }, seg);
-      const dx = b.x - closest.x;
-      const dy = b.y - closest.y;
-      const d = Math.hypot(dx, dy);
-      if (d >= this.ballRadius || d === 0) continue;
-      const nx = dx / d;
-      const ny = dy / d;
-      const dotv = b.vx * nx + b.vy * ny;
-      if (dotv < 0) {
-        b.vx -= 2 * dotv * nx;
-        b.vy -= 2 * dotv * ny;
-      }
-      b.x = closest.x + nx * this.ballRadius;
-      b.y = closest.y + ny * this.ballRadius;
-    }
-  }
-  getBalls() {
-    return this.balls;
+    if (!this.timeBase) return 0;
+    return this.refServerT + (performance.now() - this.refClientNow) - this.delayMs;
   }
 };
 var SnapshotBuffer = class {
@@ -330,6 +242,28 @@ var SnapshotBuffer = class {
         ...pb,
         angle: pa.angle + (pb.angle - pa.angle) * f
       });
+    }
+    return out;
+  }
+  /** Returns balls interpolated to the given server time. */
+  ballsAt(renderTime) {
+    const br = this.bracketing(renderTime);
+    if (!br) return null;
+    const [a, b, f] = br;
+    const n = Math.max(a.balls.length, b.balls.length);
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const ba = a.balls[i];
+      const bb = b.balls[i];
+      if (ba && bb) {
+        out.push({
+          ...bb,
+          x: ba.x + (bb.x - ba.x) * f,
+          y: ba.y + (bb.y - ba.y) * f
+        });
+      } else if (bb) {
+        out.push(bb);
+      }
     }
     return out;
   }
@@ -1464,7 +1398,7 @@ var sound = new SoundManager();
 var NAME_KEY = "neonpong.name";
 var net = null;
 var renderer = null;
-var physics = new LocalPhysics();
+var clock = new NetClock();
 var buffer = new SnapshotBuffer();
 var meID = "";
 var latestSnap = null;
@@ -1837,8 +1771,7 @@ function renderRooms() {
 function handleSnapshot(snap) {
   latestSnap = snap;
   buffer.push(snap);
-  physics.sync(snap);
-  physics.onSnapshot(snap);
+  clock.sync(snap);
   const me = snap.players.find((p) => p.id === snap.you);
   $("btn-reset-ball").classList.toggle("hidden", !(snap.state === "playing" && !!snap.you && snap.host === snap.you));
   $("btn-audio").classList.toggle("hidden", snap.state !== "playing");
@@ -1888,7 +1821,6 @@ function setupField(snap) {
   if (!renderer) renderer = new GameRenderer($("game-canvas"));
   renderer.resize();
   renderer.setup(snap.sides, snap.radius, snap.chamfer, snap.paddleHalf, snap.ballRadius, myIndex);
-  physics.setup(snap.sides, snap.radius, snap.chamfer, snap.ballRadius);
   currentSides = snap.sides;
   currentMyIndex = myIndex;
 }
@@ -1943,19 +1875,18 @@ function frame(now) {
   frameCounter++;
   if (frameCounter % 30 === 0) {
     const latency = net ? net.getLatency() : 60;
-    physics.latencySec = latency / 1e3;
-    physics.setDelay(Math.round(latency) + 50);
+    clock.setDelay(Math.round(latency) + 50);
   }
-  physics.step(dt);
+  // Own paddle: local prediction at the rAF rate (immediate, no server lag).
   stepMyPaddle(dt);
   if (renderer && latestSnap) {
-    const renderTime = physics.renderTime;
+    const renderTime = clock.renderTime;
     const players = buffer.playersAt(renderTime) ?? latestSnap.players;
     renderer.render({
       snap: latestSnap,
       players,
       myAngle,
-      balls: physics.getBalls()
+      balls: buffer.ballsAt(renderTime) ?? latestSnap.balls
     });
     renderHUD(latestSnap, (now - matchStartTime) / 1e3);
   }
@@ -1973,11 +1904,10 @@ function stepMyPaddle(dt) {
     myAngle += dir * screenDir * (speed / faceLen) * dt;
     myAngle = Math.max(half, Math.min(1 - half, myAngle));
   } else if (inputSeq <= serverLastSeq) {
-    const tickTravel = speed / faceLen / 60;
-    const deadZone = tickTravel * 2;
+    // Reconcile only a genuine desync (dropped/ignored input), never micro-jitter.
     const err = serverMyAngle - myAngle;
-    if (Math.abs(err) > deadZone) {
-      myAngle += err * Math.min(1, dt / 0.15);
+    if (Math.abs(err) > 0.06) {
+      myAngle = serverMyAngle;
     }
   }
 }
@@ -1985,13 +1915,13 @@ function showGameOver(snap) {
   stopLoop();
   showScreen("game");
   if (renderer && latestSnap) {
-    const renderTime = physics.renderTime;
+    const renderTime = clock.renderTime;
     const players = buffer.playersAt(renderTime) ?? latestSnap.players;
     renderer.render({
       snap: latestSnap,
       players,
       myAngle,
-      balls: physics.getBalls()
+      balls: buffer.ballsAt(renderTime) ?? latestSnap.balls
     });
   }
   const winner = snap.players.find((p) => p.id === snap.winner);

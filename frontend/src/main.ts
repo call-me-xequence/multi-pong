@@ -1,7 +1,7 @@
 // main.ts — application entry point: screens, networking and the game loop.
 
 import { Net } from './net.js';
-import { LocalPhysics, SnapshotBuffer } from './physics.js';
+import { NetClock, SnapshotBuffer } from './physics.js';
 import { GameRenderer } from './renderer.js';
 import {
   $,
@@ -22,7 +22,7 @@ const NAME_KEY = 'neonpong.name';
 
 let net: Net | null = null;
 let renderer: GameRenderer | null = null;
-const physics = new LocalPhysics();
+const clock = new NetClock();
 const buffer = new SnapshotBuffer();
 
 let meID = '';
@@ -456,8 +456,7 @@ function renderRooms(): void {
 function handleSnapshot(snap: Snapshot): void {
   latestSnap = snap;
   buffer.push(snap);
-  physics.sync(snap);
-  physics.onSnapshot(snap);
+  clock.sync(snap);
 
   const me = snap.players.find((p) => p.id === snap.you);
 
@@ -518,7 +517,6 @@ function setupField(snap: Snapshot): void {
   if (!renderer) renderer = new GameRenderer($('game-canvas') as HTMLCanvasElement);
   renderer.resize();
   renderer.setup(snap.sides, snap.radius, snap.chamfer, snap.paddleHalf, snap.ballRadius, myIndex);
-  physics.setup(snap.sides, snap.radius, snap.chamfer, snap.ballRadius);
 
   currentSides = snap.sides;
   currentMyIndex = myIndex;
@@ -592,21 +590,20 @@ function frame(now: number): void {
   frameCounter++;
   if (frameCounter % 30 === 0) {
     const latency = net ? net.getLatency() : 60;
-    physics.latencySec = latency / 1000;
-    physics.setDelay(Math.round(latency) + 50);
+    clock.setDelay(Math.round(latency) + 50);
   }
 
-  physics.step(dt);
+  // Own paddle: local prediction at the rAF rate (immediate, no server lag).
   stepMyPaddle(dt);
 
   if (renderer && latestSnap) {
-    const renderTime = physics.renderTime;
+    const renderTime = clock.renderTime;
     const players = buffer.playersAt(renderTime) ?? latestSnap.players;
     renderer.render({
       snap: latestSnap,
       players,
       myAngle,
-      balls: physics.getBalls(),
+      balls: buffer.ballsAt(renderTime) ?? latestSnap.balls,
     });
     renderHUD(latestSnap, (now - matchStartTime) / 1000);
   }
@@ -630,18 +627,13 @@ function stepMyPaddle(dt: number): void {
     myAngle += dir * screenDir * (speed / faceLen) * dt;
     myAngle = Math.max(half, Math.min(1 - half, myAngle));
   } else if (inputSeq <= serverLastSeq) {
-    // Our own paddle is rendered purely from local prediction (maximum
-    // responsiveness). The server runs a fixed 60 Hz tick while we step every
-    // animation frame, so after a move the server can differ from us by up to
-    // ~1 tick (~6-7 px at 380 px/s). Easing toward the server for such noise is
-    // what made the paddle "drift back" a few px after stopping, so we ignore
-    // errors up to ~2 ticks and only correct a genuine divergence (e.g. an
-    // input that never reached the server), eased back quickly.
-    const tickTravel = (speed / faceLen) / 60; // fraction of the face per 60 Hz tick
-    const deadZone = tickTravel * 2;
+    // Reconcile only a genuine desync (dropped/ignored input). Tick quantization
+    // keeps the server a hair behind the client, so easing toward it made the
+    // paddle slide back a few px after every stop. Large errors get one hard
+    // correction; small ones are trusted to the local prediction.
     const err = serverMyAngle - myAngle;
-    if (Math.abs(err) > deadZone) {
-      myAngle += err * Math.min(1, dt / 0.15);
+    if (Math.abs(err) > 0.06) {
+      myAngle = serverMyAngle;
     }
   }
 }
@@ -651,13 +643,13 @@ function showGameOver(snap: Snapshot): void {
   showScreen('game');
 
   if (renderer && latestSnap) {
-    const renderTime = physics.renderTime;
+    const renderTime = clock.renderTime;
     const players = buffer.playersAt(renderTime) ?? latestSnap.players;
     renderer.render({
       snap: latestSnap,
       players,
       myAngle,
-      balls: physics.getBalls(),
+      balls: buffer.ballsAt(renderTime) ?? latestSnap.balls,
     });
   }
 

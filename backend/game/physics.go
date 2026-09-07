@@ -16,19 +16,14 @@ func (r *Room) Update(dt float64) {
 	if r.State != StatePlaying {
 		return
 	}
-	r.simTime = r.simTime.Add(time.Duration(dt * float64(time.Second)))
-	r.pushHistoryLocked()
-	r.simulate(dt, true)
+	r.simulate(dt)
 }
 
 // simulate runs one simulation tick. The caller must hold the write lock.
-// timedEvents disables slow periodic events (accel / add-ball / respawn) during
-// a rewind re-simulation so they don't fire twice.
-func (r *Room) simulate(dt float64, timedEvents bool) {
+func (r *Room) simulate(dt float64) {
 	if r.State != StatePlaying {
 		return
 	}
-	r.drainInputsLocked()
 	// Decide each bot's held input for this tick before the paddles move, so a
 	// bot paddle reacts within the same tick as the ball it is tracking.
 	r.botThinkLocked()
@@ -54,35 +49,39 @@ func (r *Room) simulate(dt float64, timedEvents bool) {
 		}
 	}
 
-	if timedEvents {
-		// Item drops and armed/debuff timers.
-		r.dropTickLocked(now)
-		r.tickItemTimersLocked(now)
+	// Item drops and armed/debuff timers.
+	r.dropTickLocked(now)
+	r.tickItemTimersLocked(now)
 
-		// 2. Periodic ball acceleration (+AccelFactor every AccelInterval seconds).
-		if cfg.BallAccel && now.Sub(r.lastAccelAt).Seconds() >= cfg.AccelInterval {
-			r.currentBallSpeed *= cfg.AccelFactor
-			if r.currentBallSpeed > cfg.BallSpeedMax {
-				r.currentBallSpeed = cfg.BallSpeedMax
-			}
-			r.lastAccelAt = now
-			r.renormalizeBallsLocked()
+	// 2. Periodic ball acceleration (+AccelFactor every AccelInterval seconds).
+	if cfg.BallAccel && now.Sub(r.lastAccelAt).Seconds() >= cfg.AccelInterval {
+		r.currentBallSpeed *= cfg.AccelFactor
+		if r.currentBallSpeed > cfg.BallSpeedMax {
+			r.currentBallSpeed = cfg.BallSpeedMax
 		}
+		r.lastAccelAt = now
+		r.renormalizeBallsLocked()
+	}
 
-		// 3. Respawn a ball after a goal (short pause) and add extra balls on an
-		// interval (up to MaxBalls).
-		if !r.nextBallAt.IsZero() {
-			if now.After(r.nextBallAt) {
-				if len(r.Balls) < cfg.MaxBalls {
+	// 3. Respawn a ball after a goal (short pause) and add extra balls on an
+	// interval (up to MaxBalls).
+	if !r.nextBallAt.IsZero() {
+		if now.After(r.nextBallAt) {
+			if len(r.Balls) < cfg.MaxBalls {
+				if r.firstServe {
+					// First ball of a match: serve at face 0 (the host).
+					r.spawnBallLocked(0)
+					r.firstServe = false
+				} else {
 					r.spawnBallLocked(r.randomAliveFaceLocked())
 				}
-				r.nextBallAt = time.Time{}
 			}
-		} else if cfg.AddBallInterval > 0 && len(r.Balls) < cfg.MaxBalls &&
-			now.Sub(r.lastAddBallAt).Seconds() >= cfg.AddBallInterval {
-			r.spawnBallLocked(-1)
-			r.lastAddBallAt = now
+			r.nextBallAt = time.Time{}
 		}
+	} else if cfg.AddBallInterval > 0 && len(r.Balls) < cfg.MaxBalls &&
+		now.Sub(r.lastAddBallAt).Seconds() >= cfg.AddBallInterval {
+		r.spawnBallLocked(-1)
+		r.lastAddBallAt = now
 	}
 
 	// 4. Drop fake balls that left their owner's zone (pre-pass, avoids mutating
@@ -166,28 +165,6 @@ func (r *Room) simulate(dt float64, timedEvents bool) {
 	}
 	for i := range goalBalls {
 		r.applyGoalLocked(goalBalls[i], goalPlayers[i])
-	}
-}
-
-// drainInputsLocked applies queued player inputs whose time has come.
-func (r *Room) drainInputsLocked() {
-	for _, p := range r.Players {
-		if len(p.Queue) == 0 {
-			continue
-		}
-		kept := p.Queue[:0]
-		for _, in := range p.Queue {
-			if in.Seq <= p.LastSeq {
-				continue // stale or duplicate
-			}
-			if !in.At.After(r.simTime) {
-				p.InputDir = in.Dir
-				p.LastSeq = in.Seq
-			} else {
-				kept = append(kept, in)
-			}
-		}
-		p.Queue = kept
 	}
 }
 
@@ -375,7 +352,12 @@ func (r *Room) releaseStuckBallLocked(b *Ball) {
 				// paddle bounce sends it back into the field.
 				dx, dy = n.X, n.Y
 			}
-			b.VX, b.VY = dx, dy
+			// Scale the stored unit direction to full speed before bouncing.
+			// bouncePaddle mixes the reflection with a steering term scaled by
+			// ball speed, so a unit-length input is drowned out by the steering
+			// and the ball always flies sideways instead of reflecting.
+			spd := r.ballSpeed(b)
+			b.VX, b.VY = dx*spd, dy*spd
 			r.bouncePaddle(b, seg, n, p.Angle+b.StuckT, p.Angle, half)
 			return
 		}

@@ -1,47 +1,19 @@
-// physics.ts — client-side prediction of the ball (deterministic physics that
-// mirrors the server) plus a snapshot buffer used to interpolate other players'
-// paddles.
+// physics.ts — server-time clock plus a snapshot buffer that interpolates
+// every remote entity (other paddles AND balls). No client-side ball
+// prediction: the ball is drawn from interpolated server snapshots, so it
+// never lags or snaps.
 
-import { buildWalls, closestPointOnSegment, type Seg } from './geometry.js';
-import type { Snapshot, SnapshotPlayer } from './types.js';
+import type { Snapshot, SnapshotBall, SnapshotPlayer } from './types.js';
 
-export interface SimBall {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  curve: number; // curve hits remaining (mirrors the server)
-}
-
-// Default interpolation delay for other players' paddles (the ball itself is
-// predicted at "now", so it stays in sync with my paddle).
+// Interpolation delay. Remote entities render at `serverNow - delay`, so there
+// is always a past and a future snapshot to blend between.
 export const RENDER_DELAY_MS = 80;
 
-const CURVE_RATE = 3.5; // rad/s, must match the server
-
-const CORRECTION_MS = 100;     // error-correction blend window
-const CORRECTION_THRESHOLD = 20; // px of error before we correct the ball
-const MAX_FRAME_DT = 0.05;     // clamp tab-switch spikes
-
-export class LocalPhysics {
-  private walls: Seg[] = [];
-  private ballRadius = 9;
-  private balls: SimBall[] = [];
-  private corrections: { x: number; y: number }[] = [];
-
-  // One-way network latency in seconds; used to align predicted balls with
-  // authoritative snapshots (server state is this far in the past).
-  latencySec = 0.06;
-
+export class NetClock {
   private timeBase = false;
   private refServerT = 0;
   private refClientNow = 0;
   private delayMs = RENDER_DELAY_MS;
-
-  setup(sides: number, radius: number, chamfer: number, ballRadius: number): void {
-    this.walls = buildWalls(sides, radius, chamfer);
-    this.ballRadius = ballRadius;
-  }
 
   /** Establishes the client<->server clock mapping. */
   sync(snap: Snapshot): void {
@@ -52,107 +24,15 @@ export class LocalPhysics {
     }
   }
 
-  /** Server's wall-clock time right now (estimated). */
-  estimatedServerNow(): number {
-    if (!this.timeBase) return 0;
-    return this.refServerT + (performance.now() - this.refClientNow);
-  }
-
-  /** Adjust the interpolation delay (for other players' paddles). */
+  /** Adjust the interpolation delay. */
   setDelay(ms: number): void {
     this.delayMs = Math.max(40, Math.min(300, ms));
   }
 
+  /** Server time the frame should render at (interpolation target). */
   get renderTime(): number {
-    return this.estimatedServerNow() - this.delayMs;
-  }
-
-  /** Re-syncs the predicted balls with a fresh authoritative snapshot. */
-  onSnapshot(snap: Snapshot): void {
-    while (this.balls.length < snap.balls.length) {
-      const s = snap.balls[this.balls.length];
-      this.balls.push({ x: s.x, y: s.y, vx: s.vx, vy: s.vy, curve: s.cv ?? 0 });
-      this.corrections.push({ x: 0, y: 0 });
-    }
-    this.balls.length = snap.balls.length;
-    this.corrections.length = snap.balls.length;
-
-    const lead = Math.max(0, this.latencySec);
-    for (let i = 0; i < snap.balls.length; i++) {
-      const s = snap.balls[i];
-      const b = this.balls[i];
-      b.curve = s.cv ?? 0;
-
-      // The server snapshot is ~latency old; extrapolate it to "now" and
-      // compare against our predicted position.
-      const tx = s.x + s.vx * lead;
-      const ty = s.y + s.vy * lead;
-      const ex = tx - b.x;
-      const ey = ty - b.y;
-      const err = Math.hypot(ex, ey);
-
-      this.corrections[i] = err > CORRECTION_THRESHOLD ? { x: ex, y: ey } : { x: 0, y: 0 };
-
-      // Keep velocity aligned with the authoritative server velocity.
-      b.vx = s.vx;
-      b.vy = s.vy;
-    }
-  }
-
-  /** Advances the local ball simulation (called every animation frame). */
-  step(dt: number): void {
-    if (dt <= 0) return;
-    if (dt > MAX_FRAME_DT) dt = MAX_FRAME_DT;
-
-    for (let i = 0; i < this.balls.length; i++) {
-      const b = this.balls[i];
-
-      // Curved balls bend their direction continuously (predictable, mirrors server).
-      if (b.curve > 0) {
-        const ang = CURVE_RATE * dt;
-        const c = Math.cos(ang);
-        const s = Math.sin(ang);
-        const nx = b.vx * c - b.vy * s;
-        b.vy = b.vx * s + b.vy * c;
-        b.vx = nx;
-      }
-
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
-      this.collideBall(b);
-
-      // Apply the error correction gradually over CORRECTION_MS.
-      const c = this.corrections[i];
-      const k = Math.min(1, (dt * 1000) / CORRECTION_MS);
-      b.x += c.x * k;
-      b.y += c.y * k;
-      c.x -= c.x * k;
-      c.y -= c.y * k;
-    }
-  }
-
-  private collideBall(b: SimBall): void {
-    for (const seg of this.walls) {
-      const closest = closestPointOnSegment({ x: b.x, y: b.y }, seg);
-      const dx = b.x - closest.x;
-      const dy = b.y - closest.y;
-      const d = Math.hypot(dx, dy);
-      if (d >= this.ballRadius || d === 0) continue;
-
-      const nx = dx / d;
-      const ny = dy / d;
-      const dotv = b.vx * nx + b.vy * ny;
-      if (dotv < 0) {
-        b.vx -= 2 * dotv * nx;
-        b.vy -= 2 * dotv * ny;
-      }
-      b.x = closest.x + nx * this.ballRadius;
-      b.y = closest.y + ny * this.ballRadius;
-    }
-  }
-
-  getBalls(): SimBall[] {
-    return this.balls;
+    if (!this.timeBase) return 0;
+    return this.refServerT + (performance.now() - this.refClientNow) - this.delayMs;
   }
 }
 
@@ -221,6 +101,33 @@ export class SnapshotBuffer {
         ...pb,
         angle: pa.angle + (pb.angle - pa.angle) * f,
       });
+    }
+    return out;
+  }
+
+  /** Returns balls interpolated to the given server time. */
+  ballsAt(renderTime: number): SnapshotBall[] | null {
+    const br = this.bracketing(renderTime);
+    if (!br) return null;
+    const [a, b, f] = br;
+
+    const n = Math.max(a.balls.length, b.balls.length);
+    const out: SnapshotBall[] = [];
+    for (let i = 0; i < n; i++) {
+      const ba = a.balls[i];
+      const bb = b.balls[i];
+      if (ba && bb) {
+        // Linear blend between the two authoritative positions.
+        out.push({
+          ...bb,
+          x: ba.x + (bb.x - ba.x) * f,
+          y: ba.y + (bb.y - ba.y) * f,
+        });
+      } else if (bb) {
+        // Spawned between the two snapshots: show it at its first position.
+        out.push(bb);
+      }
+      // Removed between snapshots (only ba): omit it.
     }
     return out;
   }

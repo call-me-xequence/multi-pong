@@ -113,6 +113,7 @@ func TestShieldBlocksGoal(t *testing.T) {
 	if err := r.Start("a"); err != nil {
 		t.Fatal(err)
 	}
+	serveNow(r)
 
 	// Park A's paddle away from the centre, aim the ball at the centre of face 0.
 	r.mu.Lock()
@@ -149,6 +150,7 @@ func TestFireBallSpeedsUp(t *testing.T) {
 	if err := r.Start("a"); err != nil {
 		t.Fatal(err)
 	}
+	serveNow(r)
 	// Arm fire on A; aim the ball straight at the centred paddle of face 0.
 	r.mu.Lock()
 	r.Players[0].FireArmT = time.Now().Add(5 * time.Second)
@@ -255,6 +257,7 @@ func TestStickyArmSticksOnContact(t *testing.T) {
 	if err := r.Start("a"); err != nil {
 		t.Fatal(err)
 	}
+	serveNow(r)
 	r.mu.Lock()
 	r.Players[0].StickyArmT = time.Now().Add(5 * time.Second)
 	r.mu.Unlock()
@@ -296,6 +299,7 @@ func TestCurveBallEventuallyStraightens(t *testing.T) {
 	if err := r.Start("a"); err != nil {
 		t.Fatal(err)
 	}
+	serveNow(r)
 	r.mu.Lock()
 	r.Players[0].CurvedArm = true
 	r.mu.Unlock()

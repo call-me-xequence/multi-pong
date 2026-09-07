@@ -14,14 +14,13 @@ import {
   type Pt,
 } from './geometry.js';
 import type { Snapshot, SnapshotBall, SnapshotPlayer } from './types.js';
-import type { SimBall } from './physics.js';
 import { drawItemIcon } from './items.js';
 
 export interface RenderState {
   snap: Snapshot;
   players: SnapshotPlayer[]; // interpolated paddles for other players
   myAngle: number;           // locally predicted paddle position of me
-  balls: SimBall[];          // locally predicted balls
+  balls: SnapshotBall[];     // interpolated balls
 }
 
 const PALETTE = ['#00f0ff', '#ff3df0', '#ffe600', '#39ff6a', '#ff7a00', '#9d6bff'];

@@ -29,6 +29,7 @@ func stickyRoom(t *testing.T) *Room {
 	if err := r.Start("a"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	serveNow(r)
 	return r
 }
 
@@ -228,5 +229,41 @@ func TestResetBall(t *testing.T) {
 	}
 	if r.Balls[0].Sticky || r.Balls[0].OnFire {
 		t.Fatal("served ball kept item effects")
+	}
+}
+
+// A sticky ball released from a paddle must reflect with the angle of
+// incidence (a meaningful normal component), not shoot purely sideways along
+// the paddle. Regression: the release used to feed bouncePaddle a unit-length
+// velocity, which the steering term (scaled by ball speed) overwhelmed.
+func TestStickyPaddleReleaseKeepsIncidence(t *testing.T) {
+	r := stickyRoom(t)
+	cfg := r.Config
+	p := r.Players[0]
+
+	r.mu.Lock()
+	p.Angle = 0.5
+	seg := r.Faces[p.Index]
+	n := geometry.Norm(geometry.Mul(geometry.Add(seg.A, seg.B), 0.5))
+	tang := geometry.Perp(n)
+	b := r.Balls[0]
+	// Incoming at 45° to the face normal, hitting near the paddle edge (the
+	// worst case for steering).
+	b.VX, b.VY = 1, 0
+	r.stickToPaddleLocked(b, seg, n, p, 0.5+cfg.PaddleHalf())
+	b.StuckUntil = time.Now().Add(-time.Millisecond) // release on the next tick
+	r.mu.Unlock()
+
+	r.Update(1.0 / 60.0)
+
+	r.mu.RLock()
+	spd := math.Hypot(r.Balls[0].VX, r.Balls[0].VY)
+	ux, uy := r.Balls[0].VX/spd, r.Balls[0].VY/spd
+	r.mu.RUnlock()
+	if spd == 0 {
+		t.Fatal("ball not released")
+	}
+	if tv := math.Abs(ux*tang.X + uy*tang.Y); tv > 0.97 {
+		t.Fatalf("sticky release went sideways (tangential=%.2f): %.2f,%.2f", tv, ux, uy)
 	}
 }

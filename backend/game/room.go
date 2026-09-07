@@ -17,12 +17,9 @@ const (
 	StateEnded   = "ended"
 )
 
-// Lag compensation tuning.
-const (
-	maxHistory     = 20    // ~333 ms of rewound state at 60 Hz
-	maxRewindTicks = 15    // ~250 ms
-	maxRewindMs    = 250.0 // clamp the client-reported lag
-)
+// serveDelay is the pre-serve countdown between the start of a match and the
+// first ball (players get a moment to position their paddles).
+const serveDelay = 3 * time.Second
 
 // Room is a single match instance shared between several clients.
 type Room struct {
@@ -45,15 +42,13 @@ type Room struct {
 	faceOwner []int              // faceOwner[face] = index into Players, or -1
 
 	// Runtime.
-	simTime          time.Time
 	currentBallSpeed float64
 	startedAt        time.Time
 	lastAccelAt      time.Time
 	lastAddBallAt    time.Time
 	nextBallAt       time.Time // when the next ball spawns after a goal (zero = none pending)
 	nextItemAt       time.Time // when the next item drops (zero = items disabled/stopped)
-	history          []historyEntry
-	rewinding        bool // true while a lag-comp rewind re-simulates (suppress sfx)
+	firstServe       bool      // true until the first ball of a match is served
 	sfx              []sfxEvent
 
 	done   chan struct{}
@@ -65,48 +60,6 @@ type Room struct {
 type sfxEvent struct {
 	Kind   string `json:"k"`           // wall, paddle, miss
 	Player string `json:"p,omitempty"` // player the event relates to (e.g. who conceded)
-}
-
-// ballState and playerState capture the parts of the world needed to rewind.
-type ballState struct {
-	X, Y, VX, VY float64
-	// Item state (must survive a rewind so effects aren't lost).
-	SpeedMul     float64
-	OnFire       bool
-	Curve        int
-	Sticky       bool
-	StickyUntil  time.Time
-	StuckUntil   time.Time
-	StuckToP     string
-	StuckT       float64
-	StuckNX      float64
-	StuckNY      float64
-	IsFake       bool
-	FakeOwner    string
-	TetherOwner  string
-	TetherTarget string
-	TetherHits   int
-}
-
-type playerState struct {
-	Angle    float64
-	InputDir int
-	Lives    int
-	IsAlive  bool
-	LastSeq  uint32
-}
-
-type historyEntry struct {
-	t                time.Time
-	balls            []ballState
-	players          []playerState
-	currentBallSpeed float64
-	nextBallAt       time.Time
-	lastAccelAt      time.Time
-	lastAddBallAt    time.Time
-	startedAt        time.Time
-	state            string
-	winnerID         string
 }
 
 // NewRoom creates a room with the given config and capacity.
@@ -282,7 +235,6 @@ func (r *Room) Kick(hostID, targetID string) (*Player, error) {
 
 	target := r.Players[idx]
 	r.Players = append(r.Players[:idx], r.Players[idx+1:]...)
-	r.history = r.history[:0]
 
 	if r.State == StatePlaying {
 		r.onEliminationLocked()
@@ -292,15 +244,16 @@ func (r *Room) Kick(hostID, targetID string) (*Player, error) {
 	return target, nil
 }
 
-// SetInput records the currently held movement direction for a player (no lag
-// compensation). Used by tests.
+// SetInput records the currently held movement direction for a player. Used by
+// tests.
 func (r *Room) SetInput(id string, dir int, seq uint32) {
 	r.HandleInput(id, dir, seq, 0)
 }
 
-// HandleInput applies a player's movement input. If the input was sent `lagMs`
-// milliseconds ago, the simulation is rewound to that point and re-simulated so
-// a late paddle move can still block a ball it "would have" blocked.
+// HandleInput applies a player's movement input immediately. The client predicts
+// its own paddle locally and reconciles from the echoed lastSeq, so the server
+// never rewinds the world: rewinding the whole simulation on every input made
+// paddles and balls visibly jump for every player.
 func (r *Room) HandleInput(id string, dir int, seq uint32, lagMs float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -313,153 +266,14 @@ func (r *Room) HandleInput(id string, dir int, seq uint32, lagMs float64) {
 	}
 
 	for _, p := range r.Players {
-		if p.ID != id {
-			continue
-		}
-		if seq <= p.LastSeq {
-			return // stale or duplicate
-		}
-		if lagMs < 0 {
-			lagMs = 0
-		}
-		if lagMs > maxRewindMs {
-			lagMs = maxRewindMs
-		}
-
-		// Outside of active play there is no simulation to rewind; apply now.
-		if r.State != StatePlaying {
+		if p.ID == id {
+			if seq <= p.LastSeq {
+				return // stale or duplicate
+			}
 			p.InputDir = dir
 			p.LastSeq = seq
 			return
 		}
-
-		// Anchor the input's "send time" in the simulation timeline rather than
-		// the wall clock. The world (ball, paddles, history) only ever advances
-		// in sim time, and sim time can drift slightly from the wall clock when
-		// the ticker is late, so using the wall clock makes rewinds inconsistent
-		// and lets paddles/balls jump.
-		at := r.simTime.Add(-time.Duration(lagMs * float64(time.Millisecond)))
-		p.Queue = append(p.Queue, queuedInput{Dir: dir, Seq: seq, At: at})
-
-		// If the input is more than one tick in the past, rewind and re-simulate.
-		if r.simTime.Sub(at) > time.Second/time.Duration(r.Config.TickRate) {
-			r.rewindToLocked(at)
-		}
-		return
-	}
-}
-
-// rewindToLocked restores the world to `at` and re-simulates forward to now,
-// applying queued inputs as their time arrives.
-func (r *Room) rewindToLocked(at time.Time) {
-	r.rewinding = true
-	defer func() { r.rewinding = false }()
-	snapIdx := -1
-	for i := range r.history {
-		if !r.history[i].t.After(at) {
-			snapIdx = i
-		}
-	}
-	if snapIdx < 0 {
-		return
-	}
-
-	target := r.simTime // sim time the re-simulation must reach again
-	snap := r.history[snapIdx]
-	r.restoreLocked(&snap)
-
-	// Drop any state recorded after the restore point: it no longer matches the
-	// re-simulated timeline.
-	r.history = r.history[:snapIdx+1]
-
-	dt := 1.0 / float64(r.Config.TickRate)
-	// Re-simulate exactly the ticks between the restored snapshot and the
-	// original sim time. Using the sim-time delta (not the wall clock) keeps the
-	// re-simulated timeline identical to the one already running, so a rewind
-	// never advances the world past where it would have been and never makes
-	// paddles/balls visibly jump.
-	ticks := int(math.Round(target.Sub(snap.t).Seconds() / dt))
-	if ticks < 0 {
-		ticks = 0
-	}
-	if ticks > maxRewindTicks {
-		ticks = maxRewindTicks
-	}
-	for i := 0; i < ticks; i++ {
-		r.simTime = r.simTime.Add(time.Duration(dt * float64(time.Second)))
-		r.simulate(dt, false)
-	}
-}
-
-// pushHistoryLocked records the current world state for future rewinds.
-func (r *Room) pushHistoryLocked() {
-	e := historyEntry{
-		t:                r.simTime,
-		currentBallSpeed: r.currentBallSpeed,
-		nextBallAt:       r.nextBallAt,
-		lastAccelAt:      r.lastAccelAt,
-		lastAddBallAt:    r.lastAddBallAt,
-		startedAt:        r.startedAt,
-		state:            r.State,
-		winnerID:         r.WinnerID,
-	}
-	for _, b := range r.Balls {
-		e.balls = append(e.balls, ballState{
-			X: b.X, Y: b.Y, VX: b.VX, VY: b.VY,
-			SpeedMul: b.SpeedMul, OnFire: b.OnFire, Curve: b.Curve, Sticky: b.Sticky,
-			StickyUntil: b.StickyUntil,
-			StuckUntil:  b.StuckUntil, StuckToP: b.StuckToP, StuckT: b.StuckT,
-			StuckNX: b.StuckNX, StuckNY: b.StuckNY,
-			IsFake: b.IsFake, FakeOwner: b.FakeOwner,
-			TetherOwner: b.TetherOwner, TetherTarget: b.TetherTarget, TetherHits: b.TetherHits,
-		})
-	}
-	for _, p := range r.Players {
-		e.players = append(e.players, playerState{
-			Angle: p.Angle, InputDir: p.InputDir,
-			Lives: p.Lives, IsAlive: p.IsAlive, LastSeq: p.LastSeq,
-		})
-	}
-	r.history = append(r.history, e)
-	if len(r.history) > maxHistory {
-		r.history = r.history[len(r.history)-maxHistory:]
-	}
-}
-
-// restoreLocked rolls the world back to a recorded snapshot. Player input
-// queues and connections are intentionally left untouched.
-func (r *Room) restoreLocked(snap *historyEntry) {
-	r.simTime = snap.t
-	r.currentBallSpeed = snap.currentBallSpeed
-	r.nextBallAt = snap.nextBallAt
-	r.lastAccelAt = snap.lastAccelAt
-	r.lastAddBallAt = snap.lastAddBallAt
-	r.startedAt = snap.startedAt
-	r.State = snap.state
-	r.WinnerID = snap.winnerID
-
-	r.Balls = r.Balls[:0]
-	for _, bs := range snap.balls {
-		r.Balls = append(r.Balls, &Ball{
-			X: bs.X, Y: bs.Y, VX: bs.VX, VY: bs.VY, Radius: r.Config.BallRadius,
-			SpeedMul: bs.SpeedMul, OnFire: bs.OnFire, Curve: bs.Curve, Sticky: bs.Sticky,
-			StickyUntil: bs.StickyUntil,
-			StuckUntil:  bs.StuckUntil, StuckToP: bs.StuckToP, StuckT: bs.StuckT,
-			StuckNX: bs.StuckNX, StuckNY: bs.StuckNY,
-			IsFake: bs.IsFake, FakeOwner: bs.FakeOwner,
-			TetherOwner: bs.TetherOwner, TetherTarget: bs.TetherTarget, TetherHits: bs.TetherHits,
-		})
-	}
-	for i := range r.Players {
-		if i >= len(snap.players) {
-			break
-		}
-		ps := snap.players[i]
-		r.Players[i].Angle = ps.Angle
-		r.Players[i].InputDir = ps.InputDir
-		r.Players[i].Lives = ps.Lives
-		r.Players[i].IsAlive = ps.IsAlive
-		r.Players[i].LastSeq = ps.LastSeq
 	}
 }
 
@@ -556,24 +370,21 @@ func (r *Room) startLocked() {
 		// holding in the previous match, otherwise the server keeps moving the
 		// paddle with the old input even though nobody is pressing anything.
 		p.InputDir = 0
-		p.Queue = p.Queue[:0]
 	}
 
 	r.rebuildGeometryLocked()
 
 	r.currentBallSpeed = cfg.BallSpeed
 	r.Balls = r.Balls[:0]
-	r.spawnBallLocked(0)
 	r.clearBallItemsLocked()
 	r.resetItemsLocked()
 
 	now := time.Now()
 	r.startedAt = now
-	r.simTime = now
 	r.lastAccelAt = now
 	r.lastAddBallAt = now
-	r.nextBallAt = time.Time{}
-	r.history = r.history[:0]
+	r.firstServe = true
+	r.nextBallAt = now.Add(serveDelay) // 3s pre-serve countdown
 	r.State = StatePlaying
 }
 
@@ -661,7 +472,6 @@ func (r *Room) onEliminationLocked() {
 	}
 
 	r.rebuildGeometryLocked()
-	r.history = r.history[:0]
 	for _, b := range r.Balls {
 		if r.pointOutsideLocked(b.X, b.Y) {
 			r.respawnBallLocked(b, r.randomAliveFaceLocked())
@@ -971,10 +781,9 @@ func (r *Room) Broadcast() {
 	}
 }
 
-// pushSfx queues an audio cue for the next broadcast. Ignored while a rewind is
-// re-simulating history so the same collision doesn't beep twice.
+// pushSfx queues an audio cue for the next broadcast.
 func (r *Room) pushSfx(kind, player string) {
-	if r.rewinding || len(r.sfx) >= 32 {
+	if len(r.sfx) >= 32 {
 		return
 	}
 	r.sfx = append(r.sfx, sfxEvent{Kind: kind, Player: player})

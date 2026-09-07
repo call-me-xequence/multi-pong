@@ -48,6 +48,7 @@ func aimPaddleCross(t *testing.T, u float64) bool {
 	if err := r.Start("a"); err != nil {
 		t.Fatal(err)
 	}
+	serveNow(r)
 
 	cross := geometry.Add(mid, geometry.Mul(tangent, u))
 	r.mu.Lock()

@@ -30,6 +30,7 @@ func tetherRoom(t *testing.T) *Room {
 	if err := r.Start("a"); err != nil {
 		t.Fatal(err)
 	}
+	serveNow(r)
 	r.mu.Lock()
 	b := r.Balls[0]
 	b.TetherOwner = "a"

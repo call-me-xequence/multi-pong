@@ -86,7 +86,6 @@ func (r *Room) cleanupBotsLocked() {
 	}
 	r.Players = kept
 	r.HostID = ""
-	r.history = r.history[:0]
 	r.State = StateWaiting
 	r.Stop()
 }
