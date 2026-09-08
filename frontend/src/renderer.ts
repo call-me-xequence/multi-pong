@@ -20,7 +20,8 @@ export interface RenderState {
   snap: Snapshot;
   players: SnapshotPlayer[]; // interpolated paddles for other players
   myAngle: number;           // locally predicted paddle position of me
-  balls: SnapshotBall[];     // interpolated balls
+  meID: string;              // my player id (from the welcome message)
+  balls: SnapshotBall[];     // interpolated/extrapolated balls
 }
 
 const PALETTE = ['#00f0ff', '#ff3df0', '#ffe600', '#39ff6a', '#ff7a00', '#9d6bff'];
@@ -109,7 +110,7 @@ export class GameRenderer {
   }
 
   private meFx(state: RenderState): Record<string, number> | undefined {
-    const me = state.snap.players.find((p) => p.id === state.snap.you);
+    const me = state.snap.players.find((p) => p.id === state.meID);
     return me ? me.fx : undefined;
   }
 
@@ -383,7 +384,7 @@ export class GameRenderer {
       const seg = this.walls[2 * p.index];
       if (!seg) continue;
 
-      const angle = p.id === state.snap.you ? state.myAngle : p.angle;
+      const angle = p.id === state.meID ? state.myAngle : p.angle;
       const dir = norm(sub(seg.b, seg.a));
       const center = add(seg.a, mul(sub(seg.b, seg.a), angle));
       const a = add(center, mul(dir, -halfLen));

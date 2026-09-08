@@ -99,6 +99,7 @@ export function renderRoomList(
 function renderPlayers(
   container: HTMLElement,
   snap: Snapshot,
+  youId: string,
   isHost: boolean,
   onKick: (id: string) => void,
 ): void {
@@ -119,7 +120,7 @@ function renderPlayers(
     li.append(dot, name);
 
     // Bots are server-controlled, so there is nothing to kick.
-    if (isHost && p.id !== snap.you && !p.isBot) {
+    if (isHost && p.id !== youId && !p.isBot) {
       const kick = document.createElement('button');
       kick.className = 'btn btn-sm btn-kick';
       kick.type = 'button';
@@ -132,12 +133,17 @@ function renderPlayers(
   });
 }
 
-export function renderLobby(snap: Snapshot, link: string, onKick: (id: string) => void): void {
+export function renderLobby(
+  snap: Snapshot,
+  youId: string,
+  link: string,
+  onKick: (id: string) => void,
+): void {
   $('lobby-room-id').textContent = snap.roomID;
   ($('lobby-link') as HTMLInputElement).value = link;
 
-  const isHost = snap.players.some((p) => p.id === snap.you && p.isHost);
-  renderPlayers($('lobby-players'), snap, isHost, onKick);
+  const isHost = snap.players.some((p) => p.id === youId && p.isHost);
+  renderPlayers($('lobby-players'), snap, youId, isHost, onKick);
 
   $('btn-start').classList.toggle('hidden', !isHost);
   $('lobby-status').textContent = isHost
@@ -145,9 +151,13 @@ export function renderLobby(snap: Snapshot, link: string, onKick: (id: string) =
     : 'Ожидание запуска создателем...';
 }
 
-export function renderGameOverPlayers(snap: Snapshot, onKick: (id: string) => void): void {
-  const isHost = snap.players.some((p) => p.id === snap.you && p.isHost);
-  renderPlayers($('game-over-kick-list'), snap, isHost, onKick);
+export function renderGameOverPlayers(
+  snap: Snapshot,
+  youId: string,
+  onKick: (id: string) => void,
+): void {
+  const isHost = snap.players.some((p) => p.id === youId && p.isHost);
+  renderPlayers($('game-over-kick-list'), snap, youId, isHost, onKick);
 }
 
 export function renderHUD(snap: Snapshot, elapsedSec: number): void {
@@ -186,14 +196,14 @@ export function showToast(msg: string, ms = 3000): void {
 }
 
 /** Updates the item slot box (right of the field) with the held item of me. */
-export function updateItemSlot(snap: Snapshot): void {
+export function updateItemSlot(snap: Snapshot, youId: string): void {
   const slot = $('item-slot');
   const cv = $('item-slot-canvas') as HTMLCanvasElement;
   const hint = $('item-slot-hint');
   slot.classList.toggle('hidden', !snap.items);
   if (!snap.items) return;
 
-  const me = snap.players.find((p) => p.id === snap.you);
+  const me = snap.players.find((p) => p.id === youId);
   // Spectators can't use items, so don't show them a stale held item.
   const key = me && me.isAlive ? me.item || '' : '';
   const ctx = cv.getContext('2d');

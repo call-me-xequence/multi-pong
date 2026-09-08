@@ -250,11 +250,24 @@ func (r *Room) SetInput(id string, dir int, seq uint32) {
 	r.HandleInput(id, dir, seq, 0)
 }
 
-// HandleInput applies a player's movement input immediately. The client predicts
+// HandleInput records the currently held movement direction for a player (no
+// anchor). Kept for tests and legacy callers; see HandleMove.
+func (r *Room) HandleInput(id string, dir int, seq uint32, lagMs float64) {
+	r.HandleMove(id, dir, nil, seq, lagMs)
+}
+
+// HandleMove applies a player's movement input immediately. The client predicts
 // its own paddle locally and reconciles from the echoed lastSeq, so the server
 // never rewinds the world: rewinding the whole simulation on every input made
 // paddles and balls visibly jump for every player.
-func (r *Room) HandleInput(id string, dir int, seq uint32, lagMs float64) {
+//
+// angle, when non-nil, is an "anchor": the absolute paddle position the client
+// is currently simulating locally. Anchors are advisory only — the server never
+// snaps to them. While the player is idle (dir == 0) the physics glides the
+// paddle toward the anchor at the normal (frozen-aware) paddle speed, so an
+// honest paddle settles where its player stopped without letting anyone
+// teleport or outrun the speed cap.
+func (r *Room) HandleMove(id string, dir int, angle *float64, seq uint32, lagMs float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -272,6 +285,18 @@ func (r *Room) HandleInput(id string, dir int, seq uint32, lagMs float64) {
 			}
 			p.InputDir = dir
 			p.LastSeq = seq
+			if angle != nil {
+				half := r.Config.PaddleHalf()
+				a := *angle
+				if a < half {
+					a = half
+				}
+				if a > 1-half {
+					a = 1 - half
+				}
+				p.TargetAngle = a
+				p.TargetSet = true
+			}
 			return
 		}
 	}
@@ -370,6 +395,7 @@ func (r *Room) startLocked() {
 		// holding in the previous match, otherwise the server keeps moving the
 		// paddle with the old input even though nobody is pressing anything.
 		p.InputDir = 0
+		p.TargetSet = false
 	}
 
 	r.rebuildGeometryLocked()
@@ -436,6 +462,9 @@ func (r *Room) rebuildGeometryLocked() {
 		} else {
 			o.p.Index = j
 		}
+		// The face changed: a stale anchor from the old geometry must not drag
+		// the paddle; the client reports a fresh one on its next anchor tick.
+		o.p.TargetSet = false
 	}
 	// Eliminated players become spectators: they own no face.
 	for _, p := range r.Players {
@@ -651,11 +680,19 @@ type snapshot struct {
 }
 
 // SnapshotJSON builds the current world snapshot as JSON bytes for one viewer.
+// Kept for callers that still want the per-viewer "you" echo (e.g. tests); the
+// live broadcast path shares a single marshal instead (see Broadcast).
 func (r *Room) SnapshotJSON(youID string) []byte {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.marshalSnapshotLocked(time.Now(), youID)
+}
 
-	now := time.Now()
+// marshalSnapshotLocked renders and marshals one world snapshot. The caller
+// must hold the read lock. youID only annotates "who am I" for a single viewer;
+// pass "" when the blob is shared across every client (each one already knows
+// its own id from the welcome message, so the field is omitted).
+func (r *Room) marshalSnapshotLocked(now time.Time, youID string) []byte {
 	s := snapshot{
 		Type:        "snapshot",
 		T:           now.UnixMilli(),
@@ -742,13 +779,16 @@ func (r *Room) Broadcast() {
 	r.mu.RLock()
 	players := make([]*Player, len(r.Players))
 	copy(players, r.Players)
+	// Marshal the world once per broadcast instead of once per player: the
+	// payload is identical for every viewer (each client already knows its own
+	// id from the welcome message), so "you" is omitted from the shared blob.
+	data := r.marshalSnapshotLocked(time.Now(), "")
 	r.mu.RUnlock()
 
 	for _, p := range players {
 		if p.IsBot {
 			continue // bots are server-controlled; nobody reads their socket
 		}
-		data := r.SnapshotJSON(p.ID)
 		select {
 		case p.Send <- data:
 		default: // slow client: drop this snapshot

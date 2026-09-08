@@ -38,7 +38,6 @@ export interface Snapshot {
   type: 'snapshot';
   t: number; // server time, ms
   roomID: string;
-  you: string;
   state: GameState;
   host: string;
   winner?: string;
@@ -103,6 +102,7 @@ export type ServerMessage =
 export interface ClientMoveMessage {
   action: 'move';
   dir: number; // +1, -1 or 0
+  angle?: number; // absolute paddle position (anchor) the client is simulating locally
   seq?: number; // input sequence number, for reconciliation
   lag?: number; // measured one-way latency in ms, for server-side lag compensation
 }

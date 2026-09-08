@@ -118,23 +118,24 @@ func (h *Hub) WSHandler(c *gin.Context) {
 	// Reader loop: parses incoming client commands.
 	for {
 		var msg struct {
-			Action      string  `json:"action"`
-			Dir         int     `json:"dir"`
-			Seq         uint32  `json:"seq"`
-			Lag         float64 `json:"lag"`
-			C           float64 `json:"c"`
-			Target      string  `json:"target"`
-			Lives       int     `json:"lives"`
-			BallAccel   bool    `json:"ballAccel"`
-			AddBallTime int     `json:"addBallTime"`
-			Items       bool    `json:"items"`
+			Action      string   `json:"action"`
+			Dir         int      `json:"dir"`
+			Angle       *float64 `json:"angle"`
+			Seq         uint32   `json:"seq"`
+			Lag         float64  `json:"lag"`
+			C           float64  `json:"c"`
+			Target      string   `json:"target"`
+			Lives       int      `json:"lives"`
+			BallAccel   bool     `json:"ballAccel"`
+			AddBallTime int      `json:"addBallTime"`
+			Items       bool     `json:"items"`
 		}
 		if err := conn.ReadJSON(&msg); err != nil {
 			break
 		}
 		switch msg.Action {
 		case "move":
-			room.HandleInput(playerID, msg.Dir, msg.Seq, msg.Lag)
+			room.HandleMove(playerID, msg.Dir, msg.Angle, msg.Seq, msg.Lag)
 		case "start":
 			if err := room.Start(playerID); err != nil {
 				queueJSON(player, map[string]interface{}{

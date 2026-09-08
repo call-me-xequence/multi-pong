@@ -47,6 +47,37 @@ func (r *Room) simulate(dt float64) {
 				p.Angle = 1 - half
 			}
 		}
+
+		// 1b. Gentle drift to the latest client "anchor" while the player is
+		// idle. Anchors never snap: the paddle only glides at the normal paddle
+		// speed (frozen players at half speed), so the field and item physics
+		// stay authoritative while an honest paddle settles exactly where its
+		// player stopped (recovering a delayed input packet). Stops as soon as
+		// the anchor is reached.
+		for _, p := range r.Players {
+			if !p.IsAlive || p.InputDir != 0 || !p.TargetSet {
+				continue
+			}
+			step := (cfg.PaddleSpeed * r.frozenSpeedFactor(p) / faceLen) * dt
+			switch {
+			case p.Angle < p.TargetAngle:
+				if p.TargetAngle-p.Angle <= step {
+					p.Angle = p.TargetAngle
+					p.TargetSet = false
+				} else {
+					p.Angle += step
+				}
+			case p.Angle > p.TargetAngle:
+				if p.Angle-p.TargetAngle <= step {
+					p.Angle = p.TargetAngle
+					p.TargetSet = false
+				} else {
+					p.Angle -= step
+				}
+			default:
+				p.TargetSet = false
+			}
+		}
 	}
 
 	// Item drops and armed/debuff timers.

@@ -15,7 +15,7 @@ import {
   updateItemSlot,
   showToast,
 } from './ui.js';
-import type { Snapshot, RoomInfo } from './types.js';
+import type { Snapshot, RoomInfo, ClientMoveMessage } from './types.js';
 import { sound } from './sound.js';
 
 const NAME_KEY = 'neonpong.name';
@@ -32,7 +32,6 @@ let serverMyAngle = 0.5;
 let inputDir = 0; // -1 / 0 / +1 in screen direction
 let inputSeq = 0; // increments with every input change, used for reconciliation
 let serverLastSeq = 0; // last input sequence acknowledged by the server
-let frameCounter = 0;
 let currentSides = 0;
 let currentMyIndex = -1; // -1 = spectator (no face)
 let wasAlive = true;
@@ -43,6 +42,7 @@ let intervalMode = false;
 let lastFrameTime = 0;
 let lastLoopTick = 0;
 let matchStartTime = 0;
+let lastAnchorAt = 0; // last time a 10 Hz anchor move was sent (ms)
 
 const keys = { left: false, right: false };
 
@@ -241,10 +241,32 @@ function setKey(which: 'left' | 'right', down: boolean): void {
   const dir = (keys.right ? 1 : 0) + (keys.left ? -1 : 0);
   if (dir !== inputDir) {
     inputDir = dir;
-    const screenDir = renderer ? renderer.getFaceScreenDirX() : 1;
-    inputSeq++;
-    net?.send({ action: 'move', dir: dir * screenDir, seq: inputSeq, lag: net.getLatency() });
+    sendMove(dir, true);
   }
+}
+
+/**
+ * Sends a "move" message. Every message carries the currently held direction
+ * (the server stays authoritative on motion) and, when withAngle is set, our
+ * locally simulated paddle angle as an "anchor": while we are idle the server
+ * only glides the paddle toward it at the normal speed, never snapping. We send
+ * on every input change AND from the frame loop at ~10 Hz so a delayed or lost
+ * input self-heals within one anchor interval.
+ */
+function sendMove(dir: number, withAngle: boolean): void {
+  if (!net) return;
+  const me = latestSnap?.players.find((p) => p.id === meID);
+  if (!me || !me.isAlive) return; // spectators don't control a paddle
+  const screenDir = renderer ? renderer.getFaceScreenDirX() : 1;
+  inputSeq++;
+  const msg: ClientMoveMessage = {
+    action: 'move',
+    dir: dir * screenDir,
+    seq: inputSeq,
+    lag: net.getLatency(),
+  };
+  if (withAngle) msg.angle = myAngle;
+  net.send(msg);
 }
 
 /** Space: use the held power-up item (alive players only). */
@@ -391,6 +413,7 @@ function connect(roomID: string, password: string, name: string): void {
     onWelcome: (w) => {
       meID = w.you;
     },
+    onLatency: (oneWayMs) => clock.updateRtt(oneWayMs),
     onSnapshot: handleSnapshot,
     onSfx: (events) => {
       for (const e of events) {
@@ -456,12 +479,12 @@ function renderRooms(): void {
 function handleSnapshot(snap: Snapshot): void {
   latestSnap = snap;
   buffer.push(snap);
-  clock.sync(snap);
+  clock.observe(snap); // syncs once and adapts the interpolation buffer
 
-  const me = snap.players.find((p) => p.id === snap.you);
+  const me = snap.players.find((p) => p.id === meID);
 
   // Host-only "reset ball" button, visible while the match is running.
-  $('btn-reset-ball').classList.toggle('hidden', !(snap.state === 'playing' && !!snap.you && snap.host === snap.you));
+  $('btn-reset-ball').classList.toggle('hidden', !(snap.state === 'playing' && snap.host === meID));
   // Volume controls are only available during the match (not on the menu).
   $('btn-audio').classList.toggle('hidden', snap.state !== 'playing');
   if (snap.state !== 'playing') $('audio-panel').classList.add('hidden');
@@ -472,7 +495,7 @@ function handleSnapshot(snap: Snapshot): void {
     // In a "vs bot" match the creator is always the host and the opponent is
     // already seated, so start immediately instead of waiting in the lobby.
     if (botMode && !botStarted) {
-      const meHost = snap.players.some((p) => p.id === snap.you && p.isHost);
+      const meHost = snap.host === meID;
       if (meHost) {
         botStarted = true;
         net?.send({ action: 'start' });
@@ -481,10 +504,10 @@ function handleSnapshot(snap: Snapshot): void {
     const sig = playersSignature(snap);
     if (sig !== lastLobbySig) {
       lastLobbySig = sig;
-      renderLobby(snap, buildInviteLink(snap.roomID), kickPlayer);
+      renderLobby(snap, meID, buildInviteLink(snap.roomID), kickPlayer);
     }
   } else if (snap.state === 'playing') {
-    updateItemSlot(snap);
+    updateItemSlot(snap, meID);
     if (me) {
       serverMyAngle = me.angle;
       serverLastSeq = me.lastSeq ?? 0;
@@ -511,7 +534,7 @@ function handleSnapshot(snap: Snapshot): void {
 }
 
 function setupField(snap: Snapshot): void {
-  const me = snap.players.find((p) => p.id === snap.you);
+  const me = snap.players.find((p) => p.id === meID);
   const myIndex = me && me.isAlive ? me.index : -1; // -1 = spectator
 
   if (!renderer) renderer = new GameRenderer($('game-canvas') as HTMLCanvasElement);
@@ -528,7 +551,7 @@ function startPlaying(snap: Snapshot): void {
   matchStartTime = performance.now();
   gameOverInitDone = false;
 
-  const me = snap.players.find((p) => p.id === snap.you);
+  const me = snap.players.find((p) => p.id === meID);
   myAngle = me ? me.angle : 0.5;
   serverMyAngle = myAngle;
 
@@ -587,14 +610,16 @@ function frame(now: number): void {
   const dt = Math.min(0.05, (now - lastFrameTime) / 1000);
   lastFrameTime = now;
 
-  frameCounter++;
-  if (frameCounter % 30 === 0) {
-    const latency = net ? net.getLatency() : 60;
-    clock.setDelay(Math.round(latency) + 50);
-  }
-
   // Own paddle: local prediction at the rAF rate (immediate, no server lag).
   stepMyPaddle(dt);
+
+  // ~10 Hz anchor refresh: periodically re-send the held direction and our
+  // locally simulated paddle angle so a delayed/lost input self-heals and the
+  // server gently settles the paddle on our position while we are idle.
+  if (now - lastAnchorAt >= 100) {
+    lastAnchorAt = now;
+    sendMove((keys.right ? 1 : 0) + (keys.left ? -1 : 0), true);
+  }
 
   if (renderer && latestSnap) {
     const renderTime = clock.renderTime;
@@ -603,6 +628,7 @@ function frame(now: number): void {
       snap: latestSnap,
       players,
       myAngle,
+      meID,
       balls: buffer.ballsAt(renderTime) ?? latestSnap.balls,
     });
     renderHUD(latestSnap, (now - matchStartTime) / 1000);
@@ -627,12 +653,12 @@ function stepMyPaddle(dt: number): void {
     myAngle += dir * screenDir * (speed / faceLen) * dt;
     myAngle = Math.max(half, Math.min(1 - half, myAngle));
   } else if (inputSeq <= serverLastSeq) {
-    // Reconcile only a genuine desync (dropped/ignored input). Tick quantization
-    // keeps the server a hair behind the client, so easing toward it made the
-    // paddle slide back a few px after every stop. Large errors get one hard
-    // correction; small ones are trusted to the local prediction.
-    const err = serverMyAngle - myAngle;
-    if (Math.abs(err) > 0.06) {
+    // While idle the 10 Hz anchors make the server glide to OUR simulated
+    // angle, so it converges to us — easing back toward it would reintroduce
+    // the small "slide back after every stop". Trust our own prediction and
+    // only re-sync when the divergence is large enough to mean a real desync
+    // (an input that never arrived, or the field being re-formed).
+    if (Math.abs(serverMyAngle - myAngle) > 0.25) {
       myAngle = serverMyAngle;
     }
   }
@@ -649,6 +675,7 @@ function showGameOver(snap: Snapshot): void {
       snap: latestSnap,
       players,
       myAngle,
+      meID,
       balls: buffer.ballsAt(renderTime) ?? latestSnap.balls,
     });
   }
@@ -661,7 +688,7 @@ function showGameOver(snap: Snapshot): void {
   $('game-over-text').textContent = text;
   renderHUD(snap, (performance.now() - matchStartTime) / 1000);
 
-  const me = snap.players.find((p) => p.id === snap.you);
+  const me = snap.players.find((p) => p.id === meID);
   const isHost = !!me?.isHost;
   $('btn-restart').classList.toggle('hidden', !isHost);
   $('game-over-config').classList.toggle('hidden', !isHost);
@@ -688,7 +715,7 @@ function showGameOver(snap: Snapshot): void {
   const sig = playersSignature(snap);
   if (sig !== lastGameOverSig) {
     lastGameOverSig = sig;
-    renderGameOverPlayers(snap, kickPlayer);
+    renderGameOverPlayers(snap, meID, kickPlayer);
   }
 
   $('game-over').classList.remove('hidden');

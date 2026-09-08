@@ -9,6 +9,8 @@ export interface NetHandlers {
   onError: (msg: string) => void;
   onKicked: () => void;
   onClose: () => void;
+  /** Called with the one-way latency (rtt/2) after each ping, for clock tuning. */
+  onLatency?: (oneWayMs: number) => void;
 }
 
 export class Net {
@@ -62,6 +64,7 @@ export class Net {
           // 30 ms. A fabricated floor makes the server treat every input as late
           // and rewind on every key change, which shows up as paddle jitter.
           this.latencyMs = Math.max(1, Math.min(250, rtt / 2));
+          this.handlers.onLatency?.(this.latencyMs);
           break;
         }
         case 'kicked':
@@ -82,7 +85,7 @@ export class Net {
     this.send({ action: 'ping', c: performance.now() });
     this.pingTimer = window.setInterval(() => {
       this.send({ action: 'ping', c: performance.now() });
-    }, 3000);
+    }, 1500);
   }
 
   send(msg: ClientMessage): void {

@@ -19,6 +19,14 @@ type Player struct {
 	// LastSeq is the sequence number of the last processed move input.
 	LastSeq uint32
 
+	// TargetAngle/TargetSet hold the latest absolute paddle position the client
+	// reported as its locally simulated "anchor". While the player is idle
+	// (InputDir == 0) the server glides the paddle toward it at the normal
+	// paddle speed, so an honest paddle settles exactly where its player stopped
+	// (recovering delayed inputs) without ever snapping or teleporting.
+	TargetAngle float64
+	TargetSet   bool
+
 	// Held item (see items.go for ids). -1 = none; a player can hold only one.
 	Item int
 
