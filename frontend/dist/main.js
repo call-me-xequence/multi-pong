@@ -1,4 +1,4 @@
-// ../frontend/src/net.ts
+// src/net.ts
 var Net = class {
   constructor(roomID, playerName, password, handlers) {
     this.roomID = roomID;
@@ -80,88 +80,7 @@ var Net = class {
   }
 };
 
-// ../frontend/src/geometry.ts
-var PI = Math.PI;
-function sub(a, b) {
-  return { x: a.x - b.x, y: a.y - b.y };
-}
-function add(a, b) {
-  return { x: a.x + b.x, y: a.y + b.y };
-}
-function mul(a, s) {
-  return { x: a.x * s, y: a.y * s };
-}
-function dot(a, b) {
-  return a.x * b.x + a.y * b.y;
-}
-function len(a) {
-  return Math.hypot(a.x, a.y);
-}
-function norm(a) {
-  const l = len(a);
-  if (l === 0) return { x: 0, y: 0 };
-  return { x: a.x / l, y: a.y / l };
-}
-function generatePolygon(sides, radius) {
-  if (sides < 3) sides = 3;
-  const out = [];
-  for (let i = 0; i < sides; i++) {
-    const angle = -PI / 2 + i * 2 * PI / sides;
-    out.push({ x: radius * Math.cos(angle), y: radius * Math.sin(angle) });
-  }
-  return out;
-}
-function chamferVertices(vertices, r) {
-  const n = vertices.length;
-  if (n < 3) return vertices.slice();
-  const a = new Array(n);
-  const b = new Array(n);
-  for (let i = 0; i < n; i++) {
-    const prev = vertices[(i - 1 + n) % n];
-    const cur = vertices[i];
-    const next = vertices[(i + 1) % n];
-    a[i] = pointAlong(cur, prev, r);
-    b[i] = pointAlong(cur, next, r);
-  }
-  const out = [b[0]];
-  for (let i = 1; i < n; i++) {
-    out.push(a[i], b[i]);
-  }
-  out.push(a[0]);
-  return out;
-}
-function pointAlong(from, to, dist) {
-  const d = sub(to, from);
-  const l = len(d);
-  if (l === 0) return { x: from.x, y: from.y };
-  return add(from, mul(d, dist / l));
-}
-function faceMidAngle(sides, face) {
-  return -PI / 2 + (face + 0.5) * (2 * PI / sides);
-}
-function closestPointOnSegment(p, s) {
-  const ab = sub(s.b, s.a);
-  const ap = sub(p, s.a);
-  const lenSq = dot(ab, ab);
-  let t = 0;
-  if (lenSq > 0) {
-    t = dot(ap, ab) / lenSq;
-    if (t < 0) t = 0;
-    else if (t > 1) t = 1;
-  }
-  return add(s.a, mul(ab, t));
-}
-function buildWalls(sides, radius, chamfer) {
-  const v = generatePolygon(sides, radius);
-  const c = chamferVertices(v, chamfer);
-  const walls = [];
-  for (let i = 0; i < c.length; i++) {
-    walls.push({ a: c[i], b: c[(i + 1) % c.length] });
-  }
-  return walls;
-}
-
-// ../frontend/src/physics.ts
+// src/physics.ts
 var RENDER_DELAY_MS = 80;
 var NetClock = class {
   constructor() {
@@ -269,7 +188,73 @@ var SnapshotBuffer = class {
   }
 };
 
-// ../frontend/src/items.ts
+// src/geometry.ts
+var PI = Math.PI;
+function sub(a, b) {
+  return { x: a.x - b.x, y: a.y - b.y };
+}
+function add(a, b) {
+  return { x: a.x + b.x, y: a.y + b.y };
+}
+function mul(a, s) {
+  return { x: a.x * s, y: a.y * s };
+}
+function len(a) {
+  return Math.hypot(a.x, a.y);
+}
+function norm(a) {
+  const l = len(a);
+  if (l === 0) return { x: 0, y: 0 };
+  return { x: a.x / l, y: a.y / l };
+}
+function generatePolygon(sides, radius) {
+  if (sides < 3) sides = 3;
+  const out = [];
+  for (let i = 0; i < sides; i++) {
+    const angle = -PI / 2 + i * 2 * PI / sides;
+    out.push({ x: radius * Math.cos(angle), y: radius * Math.sin(angle) });
+  }
+  return out;
+}
+function chamferVertices(vertices, r) {
+  const n = vertices.length;
+  if (n < 3) return vertices.slice();
+  const a = new Array(n);
+  const b = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const prev = vertices[(i - 1 + n) % n];
+    const cur = vertices[i];
+    const next = vertices[(i + 1) % n];
+    a[i] = pointAlong(cur, prev, r);
+    b[i] = pointAlong(cur, next, r);
+  }
+  const out = [b[0]];
+  for (let i = 1; i < n; i++) {
+    out.push(a[i], b[i]);
+  }
+  out.push(a[0]);
+  return out;
+}
+function pointAlong(from, to, dist) {
+  const d = sub(to, from);
+  const l = len(d);
+  if (l === 0) return { x: from.x, y: from.y };
+  return add(from, mul(d, dist / l));
+}
+function faceMidAngle(sides, face) {
+  return -PI / 2 + (face + 0.5) * (2 * PI / sides);
+}
+function buildWalls(sides, radius, chamfer) {
+  const v = generatePolygon(sides, radius);
+  const c = chamferVertices(v, chamfer);
+  const walls = [];
+  for (let i = 0; i < c.length; i++) {
+    walls.push({ a: c[i], b: c[(i + 1) % c.length] });
+  }
+  return walls;
+}
+
+// src/items.ts
 var ITEMS = [
   { key: "fire", name: "\u0413\u043E\u0440\u044F\u0449\u0438\u0439 \u043C\u044F\u0447", desc: "+50% \u043A \u0441\u043A\u043E\u0440\u043E\u0441\u0442\u0438 \u043C\u044F\u0447\u0430", color: "#ffb020", dark: "#ff3d00" },
   { key: "flash", name: "\u041E\u0441\u043B\u0435\u043F\u043B\u0435\u043D\u0438\u0435", desc: "\u0412\u0441\u043F\u044B\u0448\u043A\u0430 \u043E\u0441\u043B\u0435\u043F\u043B\u044F\u0435\u0442 \u0432\u0441\u0435\u0445 \u0441\u043E\u043F\u0435\u0440\u043D\u0438\u043A\u043E\u0432", color: "#ffffff", dark: "#ffe9a8" },
@@ -693,7 +678,7 @@ function volcano(ctx, r) {
   ctx.fill();
 }
 
-// ../frontend/src/renderer.ts
+// src/renderer.ts
 var PALETTE = ["#00f0ff", "#ff3df0", "#ffe600", "#39ff6a", "#ff7a00", "#9d6bff"];
 function playerColor(index) {
   return PALETTE[(index % PALETTE.length + PALETTE.length) % PALETTE.length];
@@ -1109,7 +1094,7 @@ function hexA2(hex, a) {
   return `rgba(${r},${g},${bl},${a})`;
 }
 
-// ../frontend/src/ui.ts
+// src/ui.ts
 function $(id) {
   return document.getElementById(id);
 }
@@ -1184,14 +1169,14 @@ function renderPlayers(container, snap, isHost, onKick) {
   container.innerHTML = "";
   snap.players.forEach((p, i) => {
     const li = document.createElement("li");
-    const dot2 = document.createElement("span");
-    dot2.className = "dot";
-    dot2.style.background = playerColor(i);
-    dot2.style.color = playerColor(i);
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    dot.style.background = playerColor(i);
+    dot.style.color = playerColor(i);
     const name = document.createElement("span");
     name.className = "pname";
     name.textContent = p.name + (p.isHost ? " \u2605" : "") + (!p.isAlive ? " \xB7 \u043D\u0430\u0431\u043B\u044E\u0434\u0430\u0442\u0435\u043B\u044C" : "");
-    li.append(dot2, name);
+    li.append(dot, name);
     if (isHost && p.id !== snap.you && !p.isBot) {
       const kick = document.createElement("button");
       kick.className = "btn btn-sm btn-kick";
@@ -1221,16 +1206,16 @@ function renderHUD(snap, elapsedSec) {
   for (const p of snap.players) {
     const item = document.createElement("div");
     item.className = "hud-player" + (p.isAlive ? "" : " dead");
-    const dot2 = document.createElement("span");
-    dot2.className = "dot";
-    dot2.style.background = playerColor(Math.max(0, p.index));
-    dot2.style.color = playerColor(Math.max(0, p.index));
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    dot.style.background = playerColor(Math.max(0, p.index));
+    dot.style.color = playerColor(Math.max(0, p.index));
     const name = document.createElement("span");
     name.textContent = p.name;
     const lives = document.createElement("span");
     lives.className = "lives";
     lives.textContent = p.isAlive ? "\u2665".repeat(Math.max(0, p.lives)) : "\u2715";
-    item.append(dot2, name, lives);
+    item.append(dot, name, lives);
     wrap.appendChild(item);
   }
   const m = Math.floor(elapsedSec / 60);
@@ -1265,7 +1250,7 @@ function updateItemSlot(snap) {
   else slot.classList.remove("flash");
 }
 
-// ../frontend/src/sound.ts
+// src/sound.ts
 var SFX_VOL_KEY = "neonpong.vol.sfx";
 var MUSIC_VOL_KEY = "neonpong.vol.music";
 var AUDIO = {
@@ -1394,7 +1379,7 @@ var SoundManager = class {
 };
 var sound = new SoundManager();
 
-// ../frontend/src/main.ts
+// src/main.ts
 var NAME_KEY = "neonpong.name";
 var net = null;
 var renderer = null;
@@ -1774,8 +1759,6 @@ function handleSnapshot(snap) {
   clock.sync(snap);
   const me = snap.players.find((p) => p.id === snap.you);
   $("btn-reset-ball").classList.toggle("hidden", !(snap.state === "playing" && !!snap.you && snap.host === snap.you));
-  $("btn-audio").classList.toggle("hidden", snap.state !== "playing");
-  if (snap.state !== "playing") $("audio-panel").classList.add("hidden");
   if (snap.state === "waiting") {
     playing = false;
     showScreen("lobby");
@@ -1877,7 +1860,6 @@ function frame(now) {
     const latency = net ? net.getLatency() : 60;
     clock.setDelay(Math.round(latency) + 50);
   }
-  // Own paddle: local prediction at the rAF rate (immediate, no server lag).
   stepMyPaddle(dt);
   if (renderer && latestSnap) {
     const renderTime = clock.renderTime;
@@ -1904,7 +1886,6 @@ function stepMyPaddle(dt) {
     myAngle += dir * screenDir * (speed / faceLen) * dt;
     myAngle = Math.max(half, Math.min(1 - half, myAngle));
   } else if (inputSeq <= serverLastSeq) {
-    // Reconcile only a genuine desync (dropped/ignored input), never micro-jitter.
     const err = serverMyAngle - myAngle;
     if (Math.abs(err) > 0.06) {
       myAngle = serverMyAngle;

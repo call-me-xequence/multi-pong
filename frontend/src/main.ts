@@ -151,7 +151,7 @@ function bindButtons(): void {
     net?.send({ action: 'reset_ball' });
   });
 
-  // Volume controls (visible only during a match).
+  // Volume controls (global — available on every screen).
   $('btn-audio').addEventListener('click', () => {
     $('audio-panel').classList.toggle('hidden');
   });
@@ -462,9 +462,6 @@ function handleSnapshot(snap: Snapshot): void {
 
   // Host-only "reset ball" button, visible while the match is running.
   $('btn-reset-ball').classList.toggle('hidden', !(snap.state === 'playing' && !!snap.you && snap.host === snap.you));
-  // Volume controls are only available during the match (not on the menu).
-  $('btn-audio').classList.toggle('hidden', snap.state !== 'playing');
-  if (snap.state !== 'playing') $('audio-panel').classList.add('hidden');
 
   if (snap.state === 'waiting') {
     playing = false;
