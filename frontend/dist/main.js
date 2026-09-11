@@ -1830,8 +1830,6 @@ function handleSnapshot(snap) {
   clock.observe(snap);
   const me = snap.players.find((p) => p.id === meID);
   $("btn-reset-ball").classList.toggle("hidden", !(snap.state === "playing" && snap.host === meID));
-  $("btn-audio").classList.toggle("hidden", snap.state !== "playing");
-  if (snap.state !== "playing") $("audio-panel").classList.add("hidden");
   if (snap.state === "waiting") {
     playing = false;
     showScreen("lobby");
