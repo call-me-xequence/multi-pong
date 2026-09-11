@@ -45,6 +45,8 @@ frontend/
   tsconfig.json
   package.json
   dist/main.js            # собранный бандл (уже включён)
+Dockerfile                # сборка для Bothost (лежит в корне репозитория)
+.dockerignore
 nginx.conf
 docker-compose.yml
 ```
@@ -78,6 +80,26 @@ docker compose up --build
 
 Откройте `http://<IP-сервера>/`. nginx отдаёт статику и проксирует `/ws`,
 `/create-room`, `/rooms` в Go-бэкенд.
+
+## Деплой на Bothost
+
+Bothost собирает образ из **корневого** `Dockerfile` — включите галочку
+«Использовать собственный Dockerfile» в дополнительных настройках бота
+(подробнее: <https://bothost.ru/docs/custom-dockerfile>).
+
+Что учтено в `Dockerfile` из требований платформы:
+
+- каталог `/app` при запуске монтируется исходниками из Git, поэтому бинарник
+  лежит в `/usr/local/bin/neonpong`, а статика фронтенда — в `/srv/www`
+  (`STATIC_DIR`), а не в `/app`;
+- приложение слушает `0.0.0.0:$PORT` (порт читается из переменной `PORT`,
+  по умолчанию `8080`) — внутренний порт в настройках бота должен совпадать;
+- отдельного nginx нет: один контейнер раздаёт и фронтенд, и API, и WebSocket
+  (`/ws`, `/create-room`, `/rooms`) с одного порта;
+- `GET /healthz` можно указать как endpoint проверки доступности.
+
+Перед пушем убедитесь, что `frontend/dist/main.js` собран (`npm run bundle`
+в `frontend/`) и закоммичен.
 
 ## Как играть
 

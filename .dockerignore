@@ -1,0 +1,7 @@
+.git
+.agents
+tools
+frontend/node_modules
+backend/neonpong
+backend/neonpong.exe
+**/*.exe
